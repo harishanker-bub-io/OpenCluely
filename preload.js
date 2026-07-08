@@ -25,6 +25,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   
   // Session memory
   getSessionHistory: () => ipcRenderer.invoke('get-session-history'),
+  getFullConversationHistory: () => ipcRenderer.invoke('get-full-conversation-history'),
   getLLMSessionHistory: () => ipcRenderer.invoke('get-llm-session-history'),
   clearSessionMemory: () => ipcRenderer.invoke('clear-session-memory'),
   formatSessionHistory: () => ipcRenderer.invoke('format-session-history'),

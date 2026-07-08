@@ -1,3 +1,5 @@
+const fs = require('fs');
+const path = require('path');
 const logger = require('../core/logger').createServiceLogger('SESSION');
 const config = require('../core/config');
 const { promptLoader } = require('../../prompt-loader');
@@ -11,7 +13,69 @@ class SessionManager {
     this.currentSkill = 'dsa'; // Default skill is DSA
     this.isInitialized = false;
     
+    // Persist session memory across app restarts
+    this.persistenceEnabled = true;
+    this.persistencePath = this._resolvePersistencePath();
+    this._saveTimer = null;
+    this._saveDebounceMs = 500;
+    
     this.initializeWithSkillPrompts();
+  }
+
+  _resolvePersistencePath() {
+    // Use the same stable app data directory as the rest of the app.
+    // app.getPath('userData') is not safe at module load time, so we fall
+    // back to a well-known directory under the user's home folder.
+    const appDataDir = config.get('app.dataDir') || path.join(require('os').homedir(), '.OpenCluely');
+    try {
+      if (!fs.existsSync(appDataDir)) {
+        fs.mkdirSync(appDataDir, { recursive: true });
+      }
+    } catch (e) {
+      // ignore mkdir errors here; we'll retry on save
+    }
+    return path.join(appDataDir, 'session-memory.json');
+  }
+
+  _loadPersistedSession() {
+    if (!this.persistenceEnabled || !this.persistencePath) return;
+    try {
+      if (fs.existsSync(this.persistencePath)) {
+        const raw = fs.readFileSync(this.persistencePath, 'utf8');
+        const data = JSON.parse(raw);
+        if (Array.isArray(data)) {
+          this.sessionMemory = data;
+          logger.info('Loaded persisted session memory', {
+            eventCount: this.sessionMemory.length,
+            path: this.persistencePath
+          });
+        }
+      }
+    } catch (error) {
+      logger.warn('Failed to load persisted session memory', {
+        error: error.message,
+        path: this.persistencePath
+      });
+    }
+  }
+
+  _savePersistedSession() {
+    if (!this.persistenceEnabled || !this.persistencePath) return;
+    clearTimeout(this._saveTimer);
+    this._saveTimer = setTimeout(() => {
+      try {
+        const dir = path.dirname(this.persistencePath);
+        if (!fs.existsSync(dir)) {
+          fs.mkdirSync(dir, { recursive: true });
+        }
+        fs.writeFileSync(this.persistencePath, JSON.stringify(this.sessionMemory), 'utf8');
+      } catch (error) {
+        logger.warn('Failed to persist session memory', {
+          error: error.message,
+          path: this.persistencePath
+        });
+      }
+    }, this._saveDebounceMs);
   }
 
   /**
@@ -23,10 +87,19 @@ class SessionManager {
     try {
       // Load prompts from the prompt loader
       promptLoader.loadPrompts();
+      
+      // Load any previously persisted session memory first
+      this._loadPersistedSession();
+      
       const availableSkills = promptLoader.getAvailableSkills();
       
-      // Add initial system context for each skill
+      // Add initial system context for each skill if not already present
       for (const skill of availableSkills) {
+        const alreadyInitialized = this.sessionMemory.some(event =>
+          event.action === 'skill_prompt_initialization' && event.skill === skill
+        );
+        if (alreadyInitialized) continue;
+        
         const skillPrompt = promptLoader.getSkillPrompt(skill);
         if (skillPrompt) {
           const event = this.createConversationEvent({
@@ -44,6 +117,7 @@ class SessionManager {
       }
       
       this.isInitialized = true;
+      this._savePersistedSession();
       logger.info('Session memory initialized with skill prompts', {
         skillCount: availableSkills.length,
         totalEvents: this.sessionMemory.length
@@ -102,6 +176,7 @@ class SessionManager {
     });
 
     this.performMaintenanceIfNeeded();
+    this._savePersistedSession();
     return event.id;
   }
 
@@ -207,12 +282,14 @@ class SessionManager {
   }
 
   /**
-   * Get the entire conversation history (excluding initialization system messages)
-   * This is useful when the model needs complete context for each new message.
+   * Get the entire conversation history for the chat renderer.
+   * Excludes system-message noise (skill changes, mic toggles) and
+   * limits to the last 200 entries to keep the IPC payload small.
    */
-  getFullConversationHistory() {
+  getFullConversationHistory(maxEntries = 200) {
     const conversationEvents = this.sessionMemory
-      .filter(event => event.role !== 'system' || !event.metadata?.isInitialization);
+      .filter(event => event.role === 'user' || event.role === 'model')
+      .slice(-maxEntries);
 
     return conversationEvents.map(event => ({
       role: event.role,
@@ -270,6 +347,7 @@ class SessionManager {
     });
 
     this.performMaintenanceIfNeeded();
+    this._savePersistedSession();
     return event.id;
   }
 
@@ -379,6 +457,7 @@ class SessionManager {
     
     this.removeOldSystemEvents();
     this.consolidateSimilarEvents();
+    this._savePersistedSession();
     
     const afterCount = this.sessionMemory.length;
     
@@ -485,6 +564,8 @@ class SessionManager {
       
       return event;
     });
+
+    this._savePersistedSession();
   }
 
   getOptimizedHistory() {
@@ -585,6 +666,7 @@ class SessionManager {
     
     // Reinitialize with skill prompts
     this.initializeWithSkillPrompts();
+    this._savePersistedSession();
   }
 
   getMemoryUsage() {

@@ -323,27 +323,10 @@ class ApplicationController {
   }
 
   setupNetworkConfiguration() {
-    // Configure session to handle network requests better
-    const ses = session.defaultSession;
-    
-    // Allow HTTPS requests to Google APIs
-    ses.webRequest.onBeforeSendHeaders((details, callback) => {
-      if (details.url.includes('generativelanguage.googleapis.com')) {
-        details.requestHeaders['User-Agent'] = 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.6261.156 Safari/537.36';
-      }
-      callback({ requestHeaders: details.requestHeaders });
-    });
-    
-    // Handle certificate errors for Google APIs
-    ses.setCertificateVerifyProc((request, callback) => {
-      if (request.hostname === 'generativelanguage.googleapis.com') {
-        callback(0); // Trust Google's certificates
-      } else {
-        callback(-2); // Use default verification
-      }
-    });
-    
-    logger.debug('Network configuration applied for Gemini API');
+    // Default Chromium network verification is used for all hosts.
+    // We do not override User-Agent or bypass certificate checks because
+    // that weakens security and is unnecessary for the Gemini API.
+    logger.debug('Network configuration: using default Chromium behavior');
   }
 
   setupPermissions() {
@@ -573,6 +556,10 @@ class ApplicationController {
 
     ipcMain.handle("get-session-history", () => {
       return sessionManager.getOptimizedHistory();
+    });
+
+    ipcMain.handle("get-full-conversation-history", () => {
+      return sessionManager.getFullConversationHistory();
     });
 
     ipcMain.handle("clear-session-memory", () => {

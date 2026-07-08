@@ -768,43 +768,131 @@
         }
       }
 
-      function loadHistory() {
-        try {
-          const raw = localStorage.getItem(CHAT_HISTORY_KEY);
-          if (!raw) return;
-          const items = JSON.parse(raw);
-          if (Array.isArray(items)) {
-            chatHistory = items;
-            // Render items (async for images)
-            items.forEach(item => {
-              if (item.kind === 'message') {
-                addMessage(item.text, item.type, true);
-              } else if (item.kind === 'snippet') {
-                addCodeSnippet(item.language, item.code, true);
-              } else if (item.kind === 'image') {
-                // Load image from IndexedDB and render
-                loadImageFromDB(item.imageId).then(dataUrl => {
-                  if (dataUrl) {
-                    const msgDiv = document.createElement('div');
-                    msgDiv.className = 'message user';
-                    const img = document.createElement('img');
-                    img.src = dataUrl;
-                    img.style.maxWidth = '250px';
-                    img.style.maxHeight = '150px';
-                    img.style.borderRadius = '8px';
-                    msgDiv.appendChild(img);
-                    if (chatMessages) {
-                      chatMessages.appendChild(msgDiv);
-                      chatMessages.scrollTop = chatMessages.scrollHeight;
-                    }
-                  } else {
-                    addMessage('📷 Screenshot captured', 'system', true);
-                  }
-                }).catch(() => {
-                  addMessage('📷 Screenshot captured', 'system', true);
-                });
+      function renderHistoryItem(item) {
+        if (item.kind === 'message') {
+          addMessage(item.text, item.type, true);
+        } else if (item.kind === 'snippet') {
+          addCodeSnippet(item.language, item.code, true);
+        } else if (item.kind === 'image') {
+          loadImageFromDB(item.imageId).then(dataUrl => {
+            if (dataUrl) {
+              const msgDiv = document.createElement('div');
+              msgDiv.className = 'message user';
+              const img = document.createElement('img');
+              img.src = dataUrl;
+              img.style.maxWidth = '250px';
+              img.style.maxHeight = '150px';
+              img.style.borderRadius = '8px';
+              msgDiv.appendChild(img);
+              if (chatMessages) {
+                chatMessages.appendChild(msgDiv);
+                chatMessages.scrollTop = chatMessages.scrollHeight;
               }
-            });
+            } else {
+              addMessage('📷 Screenshot captured', 'system', true);
+            }
+          }).catch(() => {
+            addMessage('📷 Screenshot captured', 'system', true);
+          });
+        }
+      }
+
+      function renderLocalHistory(items) {
+        if (!Array.isArray(items)) return;
+        chatHistory = items;
+        items.forEach(renderHistoryItem);
+      }
+
+      async function loadHistoryFromMain() {
+        try {
+          if (!window.electronAPI || !window.electronAPI.getFullConversationHistory) {
+            return false;
+          }
+          const history = await window.electronAPI.getFullConversationHistory();
+          if (!Array.isArray(history) || history.length === 0) {
+            return false;
+          }
+
+          // Convert main-process conversation events to chat history format
+          const newChatHistory = [];
+          history.forEach(event => {
+            if (event.role === 'system') return;
+            if (!event.content || typeof event.content !== 'string') return;
+
+            if (event.role === 'model') {
+              // Split model response into text + snippets
+              const blocks = extractCodeBlocks(event.content);
+              const textOnly = stripCodeBlocks(event.content, blocks);
+              if (textOnly && textOnly.trim().length) {
+                newChatHistory.push({ kind: 'message', type: 'assistant', text: textOnly });
+              }
+              blocks.forEach(b => {
+                newChatHistory.push({ kind: 'snippet', language: b.language, code: b.code });
+              });
+            } else {
+              // User event
+              let type = 'user';
+              if (event.action === 'speech_transcription') type = 'transcription';
+              else if (event.action === 'ocr_extraction') type = 'system';
+              newChatHistory.push({ kind: 'message', type, text: event.content });
+            }
+          });
+
+          chatHistory = newChatHistory;
+          saveHistory();
+          return true;
+        } catch (error) {
+          console.warn('Failed to load history from main process', error);
+          return false;
+        }
+      }
+
+      async function loadHistory() {
+        try {
+          console.log('[CHAT] Loading history...');
+          if (chatMessages) {
+            chatMessages.innerHTML = '';
+          }
+
+          const loadedFromMain = await loadHistoryFromMain();
+          if (loadedFromMain) {
+            chatHistory.forEach(renderHistoryItem);
+            console.log('[CHAT] Rendered', chatHistory.length, 'items from main process');
+          }
+
+          // Always merge image items from localStorage (main process does not store images)
+          try {
+            const raw = localStorage.getItem(CHAT_HISTORY_KEY);
+            if (raw) {
+              const items = JSON.parse(raw);
+              if (Array.isArray(items)) {
+                const imageItems = items.filter(item => item.kind === 'image');
+                const existingImageIds = new Set(chatHistory.filter(i => i.kind === 'image').map(i => i.imageId));
+                imageItems.forEach(item => {
+                  if (!existingImageIds.has(item.imageId)) {
+                    chatHistory.push(item);
+                    renderHistoryItem(item);
+                  }
+                });
+                if (imageItems.length > 0) {
+                  saveHistory();
+                }
+              }
+            }
+          } catch (e) {
+            console.warn('[CHAT] Failed to merge local image history', e);
+          }
+
+          if (!loadedFromMain) {
+            // Main process was empty; fall back to full localStorage history
+            const raw = localStorage.getItem(CHAT_HISTORY_KEY);
+            if (!raw) {
+              console.log('[CHAT] No local history found');
+              return;
+            }
+            const items = JSON.parse(raw);
+            renderLocalHistory(items);
+            console.log('[CHAT] Rendered', items.length, 'items from localStorage');
           }
         } catch (e) {
           console.warn('Failed to load history', e);
@@ -936,9 +1024,20 @@
         });
       }
 
+      // Reload history whenever the window becomes visible (handles hidden windows and quick toggles)
+      document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'visible') {
+          loadHistory();
+        }
+      });
+
       // Initialize availability and history
-      loadHistory();
-      initSpeechAvailability();
+      loadHistory().then(() => {
+        initSpeechAvailability();
+        if (!chatHistory || chatHistory.length === 0) {
+          addMessage('Recording in Progress. press Alt+R to stop recording.', 'system');
+        }
+      });
 
       // Basic message function with markdown support for assistant messages
       function addMessage(text, type = 'user', skipPersist = false) {
@@ -1404,10 +1503,7 @@
         }
       });
 
-      // Initialize
-      if (!chatHistory || chatHistory.length === 0) {
-        addMessage('Recording in Progress. press Alt+R to stop recording.', 'system');
-      }
+      // Initialize — loadHistory is called earlier via the async path above
     </script>
   </body>
 </html>

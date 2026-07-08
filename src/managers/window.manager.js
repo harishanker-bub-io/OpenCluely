@@ -889,8 +889,18 @@ class WindowManager {
   
   setupWindowEventHandlers() {
     this.windows.forEach((window, type) => {
+      // Chat and main windows hide on close instead of being destroyed,
+      // so the DOM state (chat history, input) survives the entire session.
+      if (type === 'chat' || type === 'main') {
+        window.on('close', (event) => {
+          event.preventDefault();
+          window.hide();
+          logger.debug('Window close intercepted (hidden)', { type });
+        });
+      }
+
       window.on('closed', () => {
-        logger.debug('Window closed', { type });
+        logger.debug('Window destroyed', { type });
         this.windows.delete(type);
       });
 
@@ -1029,9 +1039,13 @@ class WindowManager {
   }
 
   switchToWindow(windowType) {
-    if (this.windows.has('chat') && this.windows.get('chat').isVisible()) {
-      this.hideChatWindow();
-      return;
+    // If chat is visible, toggle it off (unless it was a shortcut request)
+    if (windowType === 'chat' && this.windows.has('chat')) {
+      const chatWin = this.windows.get('chat');
+      if (chatWin && !chatWin.isDestroyed() && chatWin.isVisible()) {
+        this.hideChatWindow();
+        return;
+      }
     }
 
     if (!this.windowConfigs[windowType]) {
@@ -1043,10 +1057,25 @@ class WindowManager {
       return;
     }
 
-    const targetWindow = this.windows.get(windowType);
+    let targetWindow = this.windows.get(windowType);
+
+    // Recreate chat/large windows if they were destroyed (e.g. by Cmd+Q
+    // path, or OS-level close). Settings/LLM-response are shown on demand
+    // via their own IPC paths and already recreate there.
+    if ((!targetWindow || targetWindow.isDestroyed()) && windowType === 'chat') {
+      logger.debug('Chat window destroyed, recreating inline');
+      this.windows.delete('chat');
+      this.createChatWindow().then((win) => {
+        this.showOnCurrentDesktop(win);
+        this.activeWindow = windowType;
+      }).catch((err) => {
+        logger.error('Failed to recreate chat window in switchToWindow', { error: err.message });
+      });
+      return;
+    }
+
     if (targetWindow) {
       this.showOnCurrentDesktop(targetWindow);
-
       this.activeWindow = windowType;
       
       logger.info('Switched to window', {
@@ -1803,11 +1832,23 @@ class WindowManager {
   }
 
   showChatWindow() {
-    const chatWindow = this.windows.get('chat');
-    if (chatWindow && !chatWindow.isDestroyed()) {
-      this.showOnCurrentDesktop(chatWindow);
-      logger.debug('Chat window shown');
+    let chatWindow = this.windows.get('chat');
+
+    // Recreate if the window was destroyed or never created
+    if (!chatWindow || chatWindow.isDestroyed()) {
+      logger.debug('Chat window missing or destroyed, recreating');
+      this.windows.delete('chat'); // clean stale ref
+      this.createChatWindow().then((win) => {
+        this.showOnCurrentDesktop(win);
+        logger.debug('Chat window recreated and shown');
+      }).catch((err) => {
+        logger.error('Failed to recreate chat window', { error: err.message });
+      });
+      return;
     }
+
+    this.showOnCurrentDesktop(chatWindow);
+    logger.debug('Chat window shown');
   }
 
   hideChatWindow() {
