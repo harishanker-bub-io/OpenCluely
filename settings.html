@@ -438,15 +438,36 @@
             <div class="settings-section">
                 <div class="settings-section-title">
                     <i class="fas fa-robot"></i>
-                    Gemini Settings
+                    LLM Provider
                 </div>
                 <div class="settings-section-content">
                     <div class="settings-item">
                         <div>
-                            <div class="settings-item-label">Google API Key</div>
-                            <div class="settings-item-description">Your Google API key for Gemini models</div>
+                            <div class="settings-item-label">Provider</div>
+                            <div class="settings-item-description">Choose your AI provider</div>
                         </div>
-                        <input type="password" class="input-field" id="geminiKey" placeholder="Enter your Google API key">
+                        <select class="input-field" id="llmProvider">
+                            <option value="gemini">Google Gemini</option>
+                            <option value="groq">Groq (Qwen 3.6)</option>
+                        </select>
+                    </div>
+                    <div id="geminiFields" class="settings-group">
+                        <div class="settings-item">
+                            <div>
+                                <div class="settings-item-label">Gemini API Key</div>
+                                <div class="settings-item-description">Your Google API key for Gemini models</div>
+                            </div>
+                            <input type="password" class="input-field" id="geminiKey" placeholder="Enter your Google API key">
+                        </div>
+                    </div>
+                    <div id="groqFields" class="settings-group" style="display:none;">
+                        <div class="settings-item">
+                            <div>
+                                <div class="settings-item-label">Groq API Key</div>
+                                <div class="settings-item-description">Your Groq API key from console.groq.com</div>
+                            </div>
+                            <input type="password" class="input-field" id="groqKey" placeholder="gsk_...">
+                        </div>
                     </div>
                 </div>
             </div>

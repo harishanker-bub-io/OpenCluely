@@ -39,6 +39,7 @@ class ConfigManager {
       },
 
       llm: {
+        provider: 'gemini', // 'gemini' or 'groq'
         gemini: {
           model: 'gemini-3.1-flash-lite',
           fallbackModels: ['gemini-2.5-flash-lite', 'gemini-3.5-flash'],
@@ -52,6 +53,17 @@ class ConfigManager {
             topP: 0.9,
             maxOutputTokens: 4096,
             thinkingConfig: { thinkingBudget: 0 }
+          }
+        },
+        groq: {
+          model: 'qwen/qwen3.6-27b',
+          visionModel: 'qwen/qwen3.6-27b',
+          maxRetries: 3,
+          timeout: 30000,
+          generation: {
+            temperature: 0.6,
+            topP: 0.95,
+            maxTokens: 4096
           }
         }
       },
@@ -119,6 +131,10 @@ class ConfigManager {
   getApiKey(service) {
     const envKey = `${service.toUpperCase()}_API_KEY`;
     return process.env[envKey];
+  }
+
+  getLLMProvider() {
+    return process.env.LLM_PROVIDER || this.get('llm.provider') || 'gemini';
   }
 
   isFeatureEnabled(feature) {

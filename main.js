@@ -1542,6 +1542,8 @@ class ApplicationController {
       whisperLanguage: process.env.WHISPER_LANGUAGE || "en",
       whisperSegmentMs: process.env.WHISPER_SEGMENT_MS || "4000",
       geminiKey: process.env.GEMINI_API_KEY || "",
+      groqKey: process.env.GROQ_API_KEY || "",
+      llmProvider: process.env.LLM_PROVIDER || config.get('llm.provider') || 'gemini',
 
       azureConfigured: !!process.env.AZURE_SPEECH_KEY && !!process.env.AZURE_SPEECH_REGION,
       speechAvailable: this.speechAvailable
@@ -1608,6 +1610,18 @@ class ApplicationController {
       }
       if (settings.geminiKey !== undefined) {
         envUpdates.GEMINI_API_KEY = settings.geminiKey;
+      }
+      if (settings.groqKey !== undefined) {
+        envUpdates.GROQ_API_KEY = settings.groqKey;
+      }
+      if (settings.llmProvider !== undefined) {
+        envUpdates.LLM_PROVIDER = settings.llmProvider;
+        // Reinitialize LLM service when provider changes
+        try {
+          llmService.initializeClient();
+        } catch (e) {
+          logger.warn('Failed to reinitialize LLM after provider change', { error: e.message });
+        }
       }
 
       // Capture the previous whisper command BEFORE persisting — persistEnvUpdates

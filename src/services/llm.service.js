@@ -1,4 +1,5 @@
 const { GoogleGenAI } = require('@google/genai');
+const { Groq } = require('groq-sdk');
 const logger = require('../core/logger').createServiceLogger('LLM');
 const config = require('../core/config');
 const { promptLoader } = require('../../prompt-loader');
@@ -6,7 +7,9 @@ const { promptLoader } = require('../../prompt-loader');
 class LLMService {
   constructor() {
     this.client = null;
+    this.groqClient = null;
     this.model = null;
+    this.provider = 'gemini';
     this.isInitialized = false;
     this.requestCount = 0;
     this.errorCount = 0;
@@ -15,22 +18,31 @@ class LLMService {
   }
 
   initializeClient() {
+    this.provider = config.getLLMProvider();
+    
+    if (this.provider === 'groq') {
+      this._initializeGroqClient();
+    } else {
+      this._initializeGeminiClient();
+    }
+  }
+
+  _initializeGeminiClient() {
     const apiKey = config.getApiKey('GEMINI');
     
-    if (!apiKey || apiKey === 'your-api-key-here') {
+    if (!apiKey || apiKey === 'your-api-key-here' || apiKey === 'your_gemini_api_key_here') {
       logger.warn('Gemini API key not configured', { 
         keyExists: !!apiKey,
-        isPlaceholder: apiKey === 'your-api-key-here'
+        isPlaceholder: apiKey === 'your_gemini_api_key_here'
       });
       return;
     }
 
     try {
       this.client = new GoogleGenAI({ apiKey });
-      
-      // Use the configured model name (default: gemini-3.5-flash)
       this.model = config.get('llm.gemini.model');
       this.isInitialized = true;
+      this.provider = 'gemini';
       
       logger.info('Gemini AI client initialized successfully', {
         model: this.model
@@ -38,6 +50,32 @@ class LLMService {
     } catch (error) {
       logger.error('Failed to initialize Gemini client', { 
         error: error.message 
+      });
+    }
+  }
+
+  _initializeGroqClient() {
+    const apiKey = config.getApiKey('GROQ');
+    
+    if (!apiKey || apiKey === 'your_groq_api_key_here') {
+      logger.warn('Groq API key not configured', {
+        keyExists: !!apiKey
+      });
+      return;
+    }
+
+    try {
+      this.groqClient = new Groq({ apiKey });
+      this.model = config.get('llm.groq.model');
+      this.isInitialized = true;
+      this.provider = 'groq';
+      
+      logger.info('Groq AI client initialized successfully', {
+        model: this.model
+      });
+    } catch (error) {
+      logger.error('Failed to initialize Groq client', {
+        error: error.message
       });
     }
   }
@@ -227,7 +265,7 @@ class LLMService {
 
   async processImageWithSkillStream(imageBuffer, mimeType, activeSkill, sessionMemory = [], programmingLanguage = null, onDelta = null) {
     if (!this.isInitialized) {
-      throw new Error('LLM service not initialized. Check Gemini API key configuration.');
+      throw new Error('LLM service not initialized. Check API key configuration.');
     }
 
     if (!imageBuffer || !Buffer.isBuffer(imageBuffer)) {
@@ -238,31 +276,36 @@ class LLMService {
     this.requestCount++;
 
     try {
-      const { promptLoader } = require('../../prompt-loader');
-      const skillPrompt = promptLoader.getSkillPrompt(activeSkill, programmingLanguage) || '';
-      const base64 = imageBuffer.toString('base64');
+      let fullText;
+      
+      if (this.provider === 'groq') {
+        fullText = await this._executeGroqImageStream(imageBuffer, mimeType, activeSkill, programmingLanguage, onDelta);
+      } else {
+        const skillPrompt = promptLoader.getSkillPrompt(activeSkill, programmingLanguage) || '';
+        const base64 = imageBuffer.toString('base64');
 
-      const geminiRequest = {
-        contents: [
-          {
-            role: 'user',
-            parts: [
-              { text: this.formatImageInstruction(activeSkill, programmingLanguage) },
-              { inlineData: { data: base64, mimeType } }
-            ]
-          }
-        ]
-      };
-      this.applyGenerationDefaults(geminiRequest);
-      if (skillPrompt && skillPrompt.trim().length > 0) {
-        geminiRequest.systemInstruction = { parts: [{ text: skillPrompt }] };
-      }
-
-      const fullText = await this.executeStreamingRequest(geminiRequest, (delta) => {
-        if (typeof onDelta === 'function' && delta) {
-          onDelta(delta);
+        const geminiRequest = {
+          contents: [
+            {
+              role: 'user',
+              parts: [
+                { text: this.formatImageInstruction(activeSkill, programmingLanguage) },
+                { inlineData: { data: base64, mimeType } }
+              ]
+            }
+          ]
+        };
+        this.applyGenerationDefaults(geminiRequest);
+        if (skillPrompt && skillPrompt.trim().length > 0) {
+          geminiRequest.systemInstruction = { parts: [{ text: skillPrompt }] };
         }
-      });
+
+        fullText = await this.executeStreamingRequest(geminiRequest, (delta) => {
+          if (typeof onDelta === 'function' && delta) {
+            onDelta(delta);
+          }
+        });
+      }
 
       const finalResponse = programmingLanguage
         ? this.enforceProgrammingLanguage(fullText, programmingLanguage)
@@ -391,20 +434,25 @@ class LLMService {
 
   async processTextWithSkillStream(text, activeSkill, sessionMemory = [], programmingLanguage = null, onDelta = null) {
     if (!this.isInitialized) {
-      throw new Error('LLM service not initialized. Check Gemini API key configuration.');
+      throw new Error('LLM service not initialized. Check API key configuration.');
     }
 
     const startTime = Date.now();
     this.requestCount++;
 
     try {
-      const geminiRequest = this.buildGeminiRequest(text, activeSkill, sessionMemory, programmingLanguage);
-
-      const fullText = await this.executeStreamingRequest(geminiRequest, (delta) => {
-        if (typeof onDelta === 'function' && delta) {
-          onDelta(delta);
-        }
-      });
+      let fullText;
+      
+      if (this.provider === 'groq') {
+        fullText = await this._executeGroqStream(text, activeSkill, sessionMemory, programmingLanguage, onDelta);
+      } else {
+        const geminiRequest = this.buildGeminiRequest(text, activeSkill, sessionMemory, programmingLanguage);
+        fullText = await this.executeStreamingRequest(geminiRequest, (delta) => {
+          if (typeof onDelta === 'function' && delta) {
+            onDelta(delta);
+          }
+        });
+      }
 
       const finalResponse = programmingLanguage
         ? this.enforceProgrammingLanguage(fullText, programmingLanguage)
@@ -1186,6 +1234,127 @@ Remember: Be intelligent about filtering - only provide detailed responses when 
       req.write(postData);
       req.end();
     });
+  }
+
+  // ── Groq (OpenAI-compatible) methods ──
+  
+  _buildGroqMessages(text, activeSkill, sessionMemory, programmingLanguage) {
+    const skillPrompt = promptLoader.getSkillPrompt(activeSkill, programmingLanguage) || '';
+    const messages = [];
+
+    // System prompt
+    if (skillPrompt.trim()) {
+      messages.push({ role: 'system', content: skillPrompt.trim() });
+    }
+
+    // Conversation history
+    if (Array.isArray(sessionMemory) && sessionMemory.length > 0) {
+      for (const entry of sessionMemory) {
+        const role = entry.role === 'model' ? 'assistant' : (entry.role === 'user' ? 'user' : entry.role);
+        const content = entry.content || entry.text || '';
+        if (content && (role === 'user' || role === 'assistant')) {
+          messages.push({ role, content });
+        }
+      }
+    }
+
+    // Current user message
+    messages.push({ role: 'user', content: text });
+
+    return messages;
+  }
+
+  async _executeGroqStream(text, activeSkill, sessionMemory, programmingLanguage, onDelta) {
+    const messages = this._buildGroqMessages(text, activeSkill, sessionMemory, programmingLanguage);
+    const genConfig = config.get('llm.groq.generation') || {};
+    
+    const groqRequest = {
+      messages,
+      model: this.model,
+      temperature: genConfig.temperature || 0.6,
+      max_completion_tokens: genConfig.maxTokens || 4096,
+      top_p: genConfig.topP || 0.95,
+      stream: true,
+    };
+
+    let fullText = '';
+    
+    try {
+      const stream = await this.groqClient.chat.completions.create(groqRequest);
+      
+      for await (const chunk of stream) {
+        const content = chunk.choices?.[0]?.delta?.content || '';
+        if (content) {
+          fullText += content;
+          if (typeof onDelta === 'function') {
+            onDelta(content);
+          }
+        }
+      }
+    } catch (error) {
+      logger.error('Groq streaming error', { error: error.message });
+      throw error;
+    }
+
+    return fullText.trim();
+  }
+
+  _buildGroqImageMessages(imageBuffer, mimeType, activeSkill, programmingLanguage) {
+    const skillPrompt = promptLoader.getSkillPrompt(activeSkill, programmingLanguage) || '';
+    const base64 = Buffer.isBuffer(imageBuffer) 
+      ? imageBuffer.toString('base64') 
+      : Buffer.from(imageBuffer).toString('base64');
+    const dataUrl = `data:${mimeType || 'image/png'};base64,${base64}`;
+
+    const messages = [];
+    if (skillPrompt.trim()) {
+      messages.push({ role: 'system', content: skillPrompt.trim() });
+    }
+
+    messages.push({
+      role: 'user',
+      content: [
+        { type: 'text', text: 'Analyze this image and provide a clear, concise response:' },
+        { type: 'image_url', image_url: { url: dataUrl } }
+      ]
+    });
+
+    return messages;
+  }
+
+  async _executeGroqImageStream(imageBuffer, mimeType, activeSkill, programmingLanguage, onDelta) {
+    const messages = this._buildGroqImageMessages(imageBuffer, mimeType, activeSkill, programmingLanguage);
+    const genConfig = config.get('llm.groq.generation') || {};
+    
+    const groqRequest = {
+      messages,
+      model: this.model,
+      temperature: genConfig.temperature || 0.6,
+      max_completion_tokens: genConfig.maxTokens || 4096,
+      top_p: genConfig.topP || 0.95,
+      stream: true,
+    };
+
+    let fullText = '';
+    
+    try {
+      const stream = await this.groqClient.chat.completions.create(groqRequest);
+      
+      for await (const chunk of stream) {
+        const content = chunk.choices?.[0]?.delta?.content || '';
+        if (content) {
+          fullText += content;
+          if (typeof onDelta === 'function') {
+            onDelta(content);
+          }
+        }
+      }
+    } catch (error) {
+      logger.error('Groq image streaming error', { error: error.message });
+      throw error;
+    }
+
+    return fullText.trim();
   }
 
   async performPreflightCheck() {

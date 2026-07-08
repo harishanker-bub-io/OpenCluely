@@ -14,6 +14,8 @@ document.addEventListener('DOMContentLoaded', () => {
     const whisperLanguageInput = document.getElementById('whisperLanguage');
     const whisperSegmentMsInput = document.getElementById('whisperSegmentMs');
     const geminiKeyInput = document.getElementById('geminiKey');
+    const groqKeyInput = document.getElementById('groqKey');
+    const llmProviderSelect = document.getElementById('llmProvider');
     const windowGapInput = document.getElementById('windowGap');
     const codingLanguageSelect = document.getElementById('codingLanguage');
     const activeSkillSelect = document.getElementById('activeSkill');
@@ -83,6 +85,8 @@ document.addEventListener('DOMContentLoaded', () => {
         if (whisperLanguageInput) whisperLanguageInput.value = settings.whisperLanguage || '';
         if (whisperSegmentMsInput) whisperSegmentMsInput.value = settings.whisperSegmentMs || '';
         if (geminiKeyInput) geminiKeyInput.value = settings.geminiKey || '';
+        if (groqKeyInput) groqKeyInput.value = settings.groqKey || '';
+        if (llmProviderSelect) llmProviderSelect.value = settings.llmProvider || 'gemini';
         if (windowGapInput) windowGapInput.value = settings.windowGap || '';
 
         // Set C++ as default if no coding language is specified
@@ -140,6 +144,8 @@ document.addEventListener('DOMContentLoaded', () => {
         if (whisperLanguageInput) settings.whisperLanguage = whisperLanguageInput.value;
         if (whisperSegmentMsInput) settings.whisperSegmentMs = whisperSegmentMsInput.value;
         if (geminiKeyInput) settings.geminiKey = geminiKeyInput.value;
+        if (groqKeyInput) settings.groqKey = groqKeyInput.value;
+        if (llmProviderSelect) settings.llmProvider = llmProviderSelect.value;
         if (windowGapInput) settings.windowGap = windowGapInput.value;
         if (codingLanguageSelect) settings.codingLanguage = codingLanguageSelect.value;
         if (activeSkillSelect) settings.activeSkill = activeSkillSelect.value;
@@ -186,6 +192,7 @@ document.addEventListener('DOMContentLoaded', () => {
         whisperLanguageInput,
         whisperSegmentMsInput,
         geminiKeyInput,
+        groqKeyInput,
         windowGapInput,
         resumeInput
     ];
@@ -228,6 +235,23 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     updateSpeechFieldStates();
+
+    // LLM provider field toggle
+    const updateLLMFieldStates = () => {
+        const provider = llmProviderSelect ? llmProviderSelect.value : 'gemini';
+        const geminiGroup = document.getElementById('geminiFields');
+        const groqGroup = document.getElementById('groqFields');
+        if (geminiGroup) geminiGroup.style.display = provider === 'gemini' ? '' : 'none';
+        if (groqGroup) groqGroup.style.display = provider === 'groq' ? '' : 'none';
+    };
+
+    if (llmProviderSelect) {
+        llmProviderSelect.addEventListener('change', () => {
+            updateLLMFieldStates();
+            saveSettings();
+        });
+    }
+    updateLLMFieldStates();
 
     // Initialize icon grid with correct paths
     const initializeIconGrid = () => {
