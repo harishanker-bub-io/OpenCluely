@@ -1271,6 +1271,14 @@ class WindowManager {
       return;
     }
 
+    // Don't show the floating overlay when the chat panel is open —
+    // it would just show duplicate info and clutter the screen.
+    const chatWindow = this.windows.get('chat');
+    if (chatWindow && chatWindow.isVisible()) {
+      logger.debug('LLM response overlay skipped: chat panel is already visible');
+      return;
+    }
+
     const llmWindow = this.windows.get('llmResponse');
     if (!llmWindow) {
       logger.error('LLM response window not available');
@@ -1309,6 +1317,12 @@ class WindowManager {
   showLLMLoading() {
     if (this.isScreenBeingShared) {
       logger.warn('LLM loading blocked due to screen sharing mode');
+      return;
+    }
+
+    // Don't show the floating loading overlay when chat panel is open
+    const chatWindow = this.windows.get('chat');
+    if (chatWindow && chatWindow.isVisible()) {
       return;
     }
 
