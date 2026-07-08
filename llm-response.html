@@ -421,9 +421,9 @@
     <div class="main-container has-header">
         <!-- Draggable Header -->
         <div class="window-header">
-            <div class="window-title">AI Response</div>
+            <div class="window-title">Response</div>
             <div class="window-controls">
-                <button id="close-window-btn" class="window-btn window-btn-close" title="Close">×</button>
+                <button id="close-window-btn" class="window-btn window-btn-close">×</button>
             </div>
         </div>
 
@@ -1017,7 +1017,7 @@
             const responseElement = document.getElementById('response-content');
         };
 
-        // Close button handler
+        // Close button handler — hides the response overlay, does NOT quit the app
         (function(){
             const btn = document.getElementById('close-window-btn');
             if (btn) {
@@ -1025,13 +1025,12 @@
                     try {
                         if (window.electronAPI && window.electronAPI.closeWindow) {
                             window.electronAPI.closeWindow();
-                        } else if (window.api && window.api.send) {
-                            window.api.send('quit-app');
                         } else {
-                            window.close();
+                            const { ipcRenderer } = require('electron');
+                            ipcRenderer.invoke('close-window');
                         }
                     } catch (e) {
-                        try { window.close(); } catch (_) {}
+                        // ignore
                     }
                 });
             }
