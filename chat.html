@@ -820,6 +820,11 @@
         saveHistory();
         // Clear DOM
         if (chatMessages) chatMessages.innerHTML = '';
+        // Clear IndexedDB images too
+        if (imageDB) {
+          const tx = imageDB.transaction('screenshots', 'readwrite');
+          tx.objectStore('screenshots').clear();
+        }
       }
 
       function applyMicVisibility() {
