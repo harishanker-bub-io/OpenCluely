@@ -318,7 +318,18 @@
                         </div>
                         <select class="input-field" id="activeSkill">
                             <option value="dsa">Data Structures & Algorithms</option>
+                            <option value="programming">Programming</option>
                         </select>
+                    </div>
+                    <div class="settings-item" style="flex-direction: column; align-items: flex-start;">
+                        <div style="margin-bottom: 10px;">
+                            <div class="settings-item-label">Resume / Background</div>
+                            <div class="settings-item-description">Paste your resume or key experience points — AI will tailor answers to your background</div>
+                        </div>
+                        <textarea class="input-field" id="resumeInput" 
+                            placeholder="Example:&#10;• 3 years at Google as Full-Stack Engineer&#10;• Built React component library used by 50+ teams&#10;• Led migration from monolith to microservices&#10;• Proficient in TypeScript, Go, AWS"
+                            style="width: 100%; min-height: 120px; resize: vertical; font-family: inherit; font-size: 13px; line-height: 1.5;"
+                        ></textarea>
                     </div>
                 </div>
             </div>

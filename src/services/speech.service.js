@@ -460,7 +460,10 @@ class SpeechService extends EventEmitter {
         throw new Error('Azure Speech SDK dependency is not installed');
       }
 
-      if (!recorder || typeof recorder.record !== 'function') {
+      // On Windows, Azure uses its own native microphone input
+      // (AudioConfig.fromDefaultMicrophoneInput) — no local recorder needed.
+      // On macOS/Linux we need node-record-lpcm16 for push-stream capture.
+      if (process.platform !== 'win32' && (!recorder || typeof recorder.record !== 'function')) {
         throw new Error('Local microphone recorder dependency is not installed');
       }
 
@@ -580,9 +583,19 @@ class SpeechService extends EventEmitter {
     this._cleanup();
 
     try {
-      this.pushStream = sdk.AudioInputStream.createPushStream();
-      this.audioConfig = sdk.AudioConfig.fromStreamInput(this.pushStream);
-      this._startMicrophoneCapture();
+      // On Windows, sox cannot reliably access the default audio device
+      // ("Sorry, there is no default audio device configured"). Use the
+      // Azure Speech SDK's built-in microphone input instead, which talks
+      // to the Windows audio subsystem directly. On macOS/Linux we keep
+      // the push-stream approach with sox/arecord for local capture.
+      if (process.platform === 'win32') {
+        this.audioConfig = sdk.AudioConfig.fromDefaultMicrophoneInput();
+        logger.info('Azure recording configured with native Windows microphone');
+      } else {
+        this.pushStream = sdk.AudioInputStream.createPushStream();
+        this.audioConfig = sdk.AudioConfig.fromStreamInput(this.pushStream);
+        this._startMicrophoneCapture();
+      }
       this.recognizer = new sdk.SpeechRecognizer(this.speechConfig, this.audioConfig);
     } catch (error) {
       logger.error('Failed to start Azure recording session', { error: error.message });
@@ -594,6 +607,7 @@ class SpeechService extends EventEmitter {
     this.recognizer.recognizing = (s, e) => {
       try {
         if (e.result.reason === sdk.ResultReason.RecognizingSpeech) {
+          logger.debug('Azure interim speech detected', { text: e.result.text });
           this.emit('interim-transcription', e.result.text);
         }
       } catch (error) {
@@ -604,12 +618,43 @@ class SpeechService extends EventEmitter {
     this.recognizer.recognized = (s, e) => {
       try {
         if (e.result.reason === sdk.ResultReason.RecognizedSpeech && e.result.text && e.result.text.trim()) {
+          logger.info('Azure speech recognized', { text: e.result.text });
           this.emit('transcription', e.result.text);
+        } else if (e.result.reason === sdk.ResultReason.NoMatch) {
+          logger.debug('Azure speech no-match (silence or unrecognized audio)');
         }
       } catch (error) {
         logger.error('Error in recognized handler', { error: error.message });
       }
     };
+
+    // Diagnostic: track whether the Azure service is actually hearing audio
+    this._azureHeardSpeech = false;
+    this._azureNoMatchCount = 0;
+    this._azureSilenceTimer = null;
+
+    this.recognizer.speechStartDetected = (s, e) => {
+      this._azureHeardSpeech = true;
+      if (this._azureSilenceTimer) {
+        clearTimeout(this._azureSilenceTimer);
+        this._azureSilenceTimer = null;
+      }
+      logger.info('Azure speech start detected (microphone is capturing audio)');
+    };
+    this.recognizer.speechEndDetected = (s, e) => {
+      logger.info('Azure speech end detected');
+    };
+
+    // Warn the user if no audio is captured within 5 seconds. On Windows
+    // this usually means the default recording device is a virtual mic
+    // (e.g. Steam Streaming Microphone) instead of the physical one.
+    this._azureSilenceTimer = setTimeout(() => {
+      if (!this._azureHeardSpeech && this.isRecording) {
+        logger.warn('No audio detected from default microphone after 5 seconds');
+        this.emit('status', 'No audio detected — check your default recording device in Windows Sound settings');
+        this.emit('error', 'No microphone audio detected. Right-click the speaker icon > Sounds > Recording tab, and set your physical microphone as "Default Device".');
+      }
+    }, 5000);
 
     this.recognizer.canceled = (s, e) => {
       logger.warn('Recognition session canceled', {
@@ -915,7 +960,9 @@ class SpeechService extends EventEmitter {
     const sessionDuration = this.sessionStartTime ? Date.now() - this.sessionStartTime : 0;
     logger.info('Stopping speech recognition session', {
       provider: this.provider,
-      sessionDuration: `${sessionDuration}ms`
+      sessionDuration: `${sessionDuration}ms`,
+      heardSpeech: this._azureHeardSpeech,
+      noMatchCount: this._azureNoMatchCount
     });
 
     if (this.provider === 'azure' && this.recognizer) {
@@ -982,6 +1029,11 @@ class SpeechService extends EventEmitter {
     if (this.segmentTimer) {
       clearInterval(this.segmentTimer);
       this.segmentTimer = null;
+    }
+
+    if (this._azureSilenceTimer) {
+      clearTimeout(this._azureSilenceTimer);
+      this._azureSilenceTimer = null;
     }
 
     if (this.recognizer) {
@@ -1529,11 +1581,25 @@ class SpeechService extends EventEmitter {
     // `recorder` is the option it actually reads (the old `recordProgram` name
     // was silently ignored, so every attempt fell back to sox). Each entry maps
     // the recorder module to the binary we must verify is on PATH.
+    //   - Windows: sox only (arecord is Linux-only)
     //   - macOS: sox (via Homebrew)
     //   - Linux: arecord (ALSA, usually preinstalled) then sox
-    const candidates = process.platform === 'darwin'
-      ? [{ recorder: 'sox', bin: 'sox' }]
-      : [{ recorder: 'arecord', bin: 'arecord' }, { recorder: 'sox', bin: 'sox' }];
+    let candidates;
+    if (process.platform === 'win32') {
+      candidates = [{ recorder: 'sox', bin: 'sox' }];
+      // On Windows, sox is often installed under %LOCALAPPDATA% and may not be
+      // on PATH for Electron child processes. Prepend it to PATH so the
+      // `where` check and the spawned subprocess both find it.
+      const localSox = path.join(process.env.LOCALAPPDATA || '', 'sox', 'sox-14.4.2');
+      if (fs.existsSync(path.join(localSox, 'sox.exe'))) {
+        process.env.PATH = `${localSox};${process.env.PATH || ''}`;
+        logger.info('Added sox install directory to PATH', { path: localSox });
+      }
+    } else if (process.platform === 'darwin') {
+      candidates = [{ recorder: 'sox', bin: 'sox' }];
+    } else {
+      candidates = [{ recorder: 'arecord', bin: 'arecord' }, { recorder: 'sox', bin: 'sox' }];
+    }
     this._startMicrophoneCaptureWithFallback(candidates);
   }
 
@@ -1551,7 +1617,18 @@ class SpeechService extends EventEmitter {
         [bin],
         { windowsHide: true, timeout: 4000 }
       );
-      return r.status === 0;
+      if (r.status === 0) return true;
+
+      // On Windows, `where` may fail even when the binary exists if it was
+      // added to PATH after the current process started. Check known install
+      // directories directly as a fallback.
+      if (process.platform === 'win32' && bin === 'sox') {
+        const localSox = path.join(process.env.LOCALAPPDATA || '', 'sox', 'sox-14.4.2', 'sox.exe');
+        if (fs.existsSync(localSox)) {
+          return true;
+        }
+      }
+      return false;
     } catch (_) {
       return false;
     }

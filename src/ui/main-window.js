@@ -25,7 +25,8 @@ class MainWindowUI {
         
         // Define available skills for navigation
         this.availableSkills = [
-            'dsa'
+            'dsa',
+            'programming'
         ];
         
         this.init();
@@ -174,20 +175,11 @@ class MainWindowUI {
 
     updateSkillIndicatorState() {
         if (this.skillIndicator) {
-            // Remove both classes first
-            this.skillIndicator.classList.remove('interactive', 'non-interactive');
-            
-            // Add the appropriate class
-            if (this.isInteractive) {
-                this.skillIndicator.classList.add('interactive');
-            } else {
-                this.skillIndicator.classList.add('non-interactive');
-            }
-            
+            this.skillIndicator.disabled = !this.isInteractive;
             logger.debug('Skill indicator state updated', {
                 component: 'MainWindowUI',
                 interactive: this.isInteractive,
-                classes: this.skillIndicator.className
+                disabled: this.skillIndicator.disabled
             });
         }
     }
@@ -267,7 +259,7 @@ class MainWindowUI {
 
     setupElements() {
         this.statusDot = document.getElementById('statusDot');
-        this.skillIndicator = document.getElementById('skillIndicator');
+        this.skillIndicator = document.getElementById('activeSkillSelect');
         this.settingsIndicator = document.getElementById('settingsIndicator'); // Optional
         this.micButton = document.getElementById('micButton');
     this.infoButton = document.getElementById('infoButton');
@@ -288,10 +280,11 @@ class MainWindowUI {
             }
         });
 
-        // Skill indicator click handler toggles DSA skill
-        this.skillIndicator.addEventListener('click', () => {
+        // Skill dropdown change handler
+        this.skillIndicator.addEventListener('change', () => {
             if (!this.isInteractive) return;
-            const newSkill = 'dsa';
+            const newSkill = this.skillIndicator.value;
+            this.currentSkill = newSkill;
             if (window.electronAPI && window.electronAPI.updateActiveSkill) {
                 window.electronAPI.updateActiveSkill(newSkill).then(() => {
                     this.handleSkillActivated(newSkill);
@@ -757,18 +750,6 @@ class MainWindowUI {
     }
 
     updateSkillIndicator() {
-        const skillNames = {
-            'dsa': 'DSA',
-            'behavioral': 'Behavioral', 
-            'sales': 'Sales',
-            'presentation': 'Presentation',
-            'data-science': 'Data Science',
-            'programming': 'Programming',
-            'devops': 'DevOps',
-            'system-design': 'System Design',
-            'negotiation': 'Negotiation'
-        };
-        
         logger.info('Updating skill indicator', {
             component: 'MainWindowUI',
             currentSkill: this.currentSkill,
@@ -780,47 +761,26 @@ class MainWindowUI {
             return;
         }
         
-        const skillName = skillNames[this.currentSkill] || this.currentSkill.toUpperCase();
-        const skillSpan = this.skillIndicator.querySelector('span');
-        
-        logger.info('Looking for skill span element', {
-            component: 'MainWindowUI',
-            spanExists: !!skillSpan,
-            skillName: skillName
-        });
-        
-        if (skillSpan) {
-            const oldText = skillSpan.textContent;
-            skillSpan.textContent = skillName;
-                        
-            const tooltip = this.isInteractive ? 
-                `${skillName} - Use ⌘↑/↓ to navigate skills` : 
-                `${skillName} - Enable interactive mode (Alt+A) to navigate`;
-            this.skillIndicator.title = tooltip;
-            
-            // Add visual feedback for skill change
-            this.animateSkillChange();
-            
-            logger.info('Skill indicator updated successfully', {
-                component: 'MainWindowUI',
-                oldText: oldText,
-                newText: skillName,
-                interactive: this.isInteractive
-            });
-        } else {
-            logger.error('Skill span element not found within skill indicator!');
+        // Set the dropdown value to match the current skill
+        if (this.skillIndicator.value !== this.currentSkill) {
+            this.skillIndicator.value = this.currentSkill;
         }
-    }
 
-    animateSkillChange() {
-        if (this.skillIndicator) {
-            this.skillIndicator.style.transform = 'scale(1.1)';
-            this.skillIndicator.style.transition = 'transform 0.2s ease';
-            
-            setTimeout(() => {
-                this.skillIndicator.style.transform = 'scale(1)';
-            }, 200);
-        }
+        const skillDisplayNames = {
+            'dsa': 'DSA',
+            'programming': 'Programming'
+        };
+        const skillName = skillDisplayNames[this.currentSkill] || this.currentSkill.toUpperCase();
+        this.skillIndicator.title = this.isInteractive ?
+            `${skillName} - Select a skill` :
+            `${skillName} - Enable interactive mode (Alt+A) to change`;
+        
+        logger.info('Skill indicator updated successfully', {
+            component: 'MainWindowUI',
+            skill: this.currentSkill,
+            displayName: skillName,
+            interactive: this.isInteractive
+        });
     }
 
     navigateSkill(direction) {

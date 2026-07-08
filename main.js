@@ -68,6 +68,14 @@ app.commandLine.appendSwitch("disable-component-update");
 app.commandLine.appendSwitch("disable-domain-reliability");
 app.commandLine.appendSwitch("no-pings");
 
+// Set a stable Windows AppUserModelId so the app appears under its own
+// name in Windows microphone privacy settings. Must be called before any
+// windows are created. The stealth name is cosmetic (window title + taskbar);
+// the AppUserModelId stays fixed so Windows can track permissions across runs.
+if (process.platform === 'win32') {
+  app.setAppUserModelId('com.opencluely.app');
+}
+
 const logger = require("./src/core/logger").createServiceLogger("MAIN");
 const config = require("./src/core/config");
 const FirstRunManager = require("./src/core/first-run");
@@ -108,6 +116,7 @@ class ApplicationController {
     this.activeSkill = "dsa";
   // Default to C++ so language is enforced from first run
   this.codingLanguage = "cpp";
+    this.resume = "";
     this.speechAvailable = false;
 
     // Utterance coalescing: VAD emits a transcript per natural pause, but a
@@ -145,6 +154,21 @@ class ApplicationController {
     };
 
     this.setupStealth();
+    
+    // Load persisted user settings from disk (survives restarts)
+    try {
+      const settingsPath = path.join(app.getPath('userData'), 'settings.json');
+      if (fs.existsSync(settingsPath)) {
+        const data = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
+        if (data.resume !== undefined) this.resume = data.resume;
+        if (data.codingLanguage) this.codingLanguage = data.codingLanguage;
+        if (data.activeSkill) this.activeSkill = data.activeSkill;
+        // Also feed resume to prompt-loader
+        const { promptLoader } = require('./prompt-loader');
+        promptLoader.setResume(this.resume || '');
+      }
+    } catch (e) { /* settings file missing or corrupt — use defaults */ }
+    
     this.setupEventHandlers();
   }
 
@@ -981,6 +1005,7 @@ class ApplicationController {
   navigateSkill(direction) {
     const availableSkills = [
       "dsa",
+      "programming",
     ];
 
     const currentIndex = availableSkills.indexOf(this.activeSkill);
@@ -1038,9 +1063,8 @@ class ApplicationController {
       // Use image directly with LLM and active skill; do not send chat messages here
       const sessionHistory = sessionManager.getOptimizedHistory();
 
-      const skillsRequiringProgrammingLanguage = ['dsa'];
+      const skillsRequiringProgrammingLanguage = ['dsa', 'programming'];
       const needsProgrammingLanguage = skillsRequiringProgrammingLanguage.includes(this.activeSkill);
-
       this._responseSeq = (this._responseSeq || 0) + 1;
       const messageId = `img-${Date.now()}-${this._responseSeq}`;
       windowManager.broadcastToAllWindows("transcription-llm-response-start", {
@@ -1104,7 +1128,7 @@ class ApplicationController {
       sessionManager.addUserInput(text, 'llm_input');
 
       // Check if current skill needs programming language context
-      const skillsRequiringProgrammingLanguage = ['dsa'];
+      const skillsRequiringProgrammingLanguage = ['dsa', 'programming'];
       const needsProgrammingLanguage = skillsRequiringProgrammingLanguage.includes(this.activeSkill);
 
       this._responseSeq = (this._responseSeq || 0) + 1;
@@ -1266,7 +1290,7 @@ class ApplicationController {
       });
 
       // Check if current skill needs programming language context
-      const skillsRequiringProgrammingLanguage = ['dsa'];
+      const skillsRequiringProgrammingLanguage = ['dsa', 'programming'];
       const needsProgrammingLanguage = skillsRequiringProgrammingLanguage.includes(this.activeSkill);
 
       // Stream the answer so it renders progressively in the chat + overlay.
@@ -1495,6 +1519,7 @@ class ApplicationController {
     return {
       codingLanguage: this.codingLanguage || "cpp",
       activeSkill: this.activeSkill || "dsa",
+      resume: this.resume || "",
       appIcon: this.appIcon || "terminal",
       selectedIcon: this.appIcon || "terminal",
       windowGap: windowManager.windowGap,
@@ -1527,6 +1552,11 @@ class ApplicationController {
         windowManager.broadcastToAllWindows("skill-updated", {
           skill: settings.activeSkill,
         });
+      }
+      if (settings.resume !== undefined) {
+        this.resume = settings.resume;
+        const { promptLoader } = require('./prompt-loader');
+        promptLoader.setResume(settings.resume);
       }
       if (settings.appIcon) {
         this.appIcon = settings.appIcon;
@@ -1634,10 +1664,36 @@ class ApplicationController {
         ...settings,
         persistedEnvKeys: persistedKeys
       });
+
+      // Persist user settings (resume, skill, language) to disk
+      this._saveUserSettings({
+        resume: this.resume,
+        codingLanguage: this.codingLanguage,
+        activeSkill: this.activeSkill,
+      });
+
       return { success: true, persistedEnvKeys: persistedKeys };
     } catch (error) {
       logger.error("Failed to save settings", { error: error.message });
       return { success: false, error: error.message };
+    }
+  }
+
+  /**
+   * Persist user settings to a JSON file in userData so they survive restarts.
+   */
+  _saveUserSettings(settings) {
+    try {
+      const settingsPath = path.join(app.getPath('userData'), 'settings.json');
+      let existing = {};
+      if (fs.existsSync(settingsPath)) {
+        try { existing = JSON.parse(fs.readFileSync(settingsPath, 'utf8')); } catch (_) {}
+      }
+      Object.assign(existing, settings);
+      fs.writeFileSync(settingsPath, JSON.stringify(existing, null, 2), 'utf8');
+      logger.debug('User settings persisted to disk');
+    } catch (error) {
+      logger.warn('Failed to persist user settings', { error: error.message });
     }
   }
 
@@ -1841,8 +1897,12 @@ class ApplicationController {
         }
       }
 
-      // Set app user model ID for Windows taskbar grouping
-      app.setAppUserModelId(`${appName.trim()}-${iconKey}`);
+      // Set app user model ID for Windows taskbar grouping.
+      // Use the stable com.opencluely.app ID so Windows microphone
+      // privacy settings persist across runs and stealth name changes.
+      if (process.platform === 'win32') {
+        app.setAppUserModelId('com.opencluely.app');
+      }
 
       // Update all window titles to match the new app name
       const windows = windowManager.windows;

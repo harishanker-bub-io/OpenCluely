@@ -6,8 +6,9 @@ class PromptLoader {
     this.prompts = new Map();
     this.promptsLoaded = false;
     this.skillPromptSent = new Set();
-    // Focus only on DSA
-    this.skillsRequiringProgrammingLanguage = ['dsa'];
+    this.resume = '';
+    // Skills that should have a programming language injected into the prompt
+    this.skillsRequiringProgrammingLanguage = ['dsa', 'programming'];
   }
 
   /**
@@ -28,7 +29,6 @@ class PromptLoader {
       for (const file of files) {
         if (file.endsWith('.md')) {
           const skillName = path.basename(file, '.md');
-          if (skillName !== 'dsa') continue; // only keep DSA
           const filePath = path.join(promptsDir, file);
           const promptContent = fs.readFileSync(filePath, 'utf8');
           
@@ -62,12 +62,27 @@ class PromptLoader {
       return null;
     }
 
+    // Inject resume context if available
+    const resume = this.resume;
+    if (resume && resume.trim()) {
+      const resumeBlock = `\n\n## CANDIDATE BACKGROUND (use naturally in answers)\n${resume.trim()}\n\nReference this experience naturally in your answers. Use "I" and "my" — you ARE this candidate. E.g., "At Google, I...", "In my 3 years with React...", "When I built the component library..."`;
+      promptContent = promptContent + resumeBlock;
+    }
+
     // Inject programming language if provided and skill requires it
     if (programmingLanguage && this.skillsRequiringProgrammingLanguage.includes(normalizedSkillName)) {
       promptContent = this.injectProgrammingLanguage(promptContent, programmingLanguage, normalizedSkillName);
     }
 
     return promptContent;
+  }
+
+  /**
+   * Set the candidate's resume/background to inject into skill prompts
+   * @param {string} resumeText - Resume or key experience points
+   */
+  setResume(resumeText) {
+    this.resume = resumeText || '';
   }
 
   /**

@@ -17,6 +17,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const windowGapInput = document.getElementById('windowGap');
     const codingLanguageSelect = document.getElementById('codingLanguage');
     const activeSkillSelect = document.getElementById('activeSkill');
+    const resumeInput = document.getElementById('resumeInput');
     const iconGrid = document.getElementById('iconGrid');
 
     // Check if window.api exists
@@ -90,6 +91,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         if (settings.activeSkill && activeSkillSelect) activeSkillSelect.value = settings.activeSkill;
+        if (settings.resume && resumeInput) resumeInput.value = settings.resume;
 
         // Handle icon selection
         const selectedIcon = settings.selectedIcon || settings.appIcon;
@@ -141,6 +143,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (windowGapInput) settings.windowGap = windowGapInput.value;
         if (codingLanguageSelect) settings.codingLanguage = codingLanguageSelect.value;
         if (activeSkillSelect) settings.activeSkill = activeSkillSelect.value;
+        if (resumeInput) settings.resume = resumeInput.value;
         
         window.api.send('save-settings', settings);
     };
