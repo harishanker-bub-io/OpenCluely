@@ -836,6 +836,28 @@
         });
       }
 
+      // Display captured screenshot image in chat
+      if (whysperAPI && whysperAPI.onScreenshotCaptured) {
+        whysperAPI.onScreenshotCaptured((event, data) => {
+          if (data && data.imageData) {
+            addMessage('📷 Screenshot captured — analyzing...', 'system');
+            // Also show a small thumbnail
+            const msgDiv = document.createElement('div');
+            msgDiv.className = 'message user';
+            const img = document.createElement('img');
+            img.src = data.imageData;
+            img.style.maxWidth = '250px';
+            img.style.maxHeight = '150px';
+            img.style.borderRadius = '8px';
+            msgDiv.appendChild(img);
+            if (chatMessages) {
+              chatMessages.appendChild(msgDiv);
+              chatMessages.scrollTop = chatMessages.scrollHeight;
+            }
+          }
+        });
+      }
+
       // Clear on session-cleared from main
       if (whysperAPI && whysperAPI.onSessionCleared) {
         whysperAPI.onSessionCleared(() => {
