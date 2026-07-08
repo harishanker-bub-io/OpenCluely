@@ -65,7 +65,7 @@ class LLMService {
     }
 
     try {
-      this.groqClient = new Groq({ apiKey });
+      this.groqClient = new Groq({ apiKey, dangerouslyAllowBrowser: true });
       this.model = config.get('llm.groq.model');
       this.isInitialized = true;
       this.provider = 'groq';
