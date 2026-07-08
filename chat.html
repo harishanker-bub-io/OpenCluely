@@ -775,12 +775,34 @@
           const items = JSON.parse(raw);
           if (Array.isArray(items)) {
             chatHistory = items;
-            // Render
+            // Render items (async for images)
             items.forEach(item => {
               if (item.kind === 'message') {
                 addMessage(item.text, item.type, true);
               } else if (item.kind === 'snippet') {
                 addCodeSnippet(item.language, item.code, true);
+              } else if (item.kind === 'image') {
+                // Load image from IndexedDB and render
+                loadImageFromDB(item.imageId).then(dataUrl => {
+                  if (dataUrl) {
+                    const msgDiv = document.createElement('div');
+                    msgDiv.className = 'message user';
+                    const img = document.createElement('img');
+                    img.src = dataUrl;
+                    img.style.maxWidth = '250px';
+                    img.style.maxHeight = '150px';
+                    img.style.borderRadius = '8px';
+                    msgDiv.appendChild(img);
+                    if (chatMessages) {
+                      chatMessages.appendChild(msgDiv);
+                      chatMessages.scrollTop = chatMessages.scrollHeight;
+                    }
+                  } else {
+                    addMessage('📷 Screenshot captured', 'system', true);
+                  }
+                }).catch(() => {
+                  addMessage('📷 Screenshot captured', 'system', true);
+                });
               }
             });
           }
@@ -836,15 +858,47 @@
         });
       }
 
+      // ---- IndexedDB for screenshot persistence (larger than localStorage) ----
+      let imageDB = null;
+      function openImageDB() {
+        return new Promise((resolve, reject) => {
+          if (imageDB) return resolve(imageDB);
+          const req = indexedDB.open('opencluely_images', 1);
+          req.onupgradeneeded = () => { req.result.createObjectStore('screenshots'); };
+          req.onsuccess = () => { imageDB = req.result; resolve(imageDB); };
+          req.onerror = () => reject(req.error);
+        });
+      }
+      async function saveImageToDB(id, dataUrl) {
+        const db = await openImageDB();
+        return new Promise((resolve, reject) => {
+          const tx = db.transaction('screenshots', 'readwrite');
+          tx.objectStore('screenshots').put(dataUrl, id);
+          tx.oncomplete = resolve;
+          tx.onerror = () => reject(tx.error);
+        });
+      }
+      async function loadImageFromDB(id) {
+        const db = await openImageDB();
+        return new Promise((resolve, reject) => {
+          const tx = db.transaction('screenshots', 'readonly');
+          const req = tx.objectStore('screenshots').get(id);
+          req.onsuccess = () => resolve(req.result);
+          req.onerror = () => reject(req.error);
+        });
+      }
+
       // Display captured screenshot image in chat
       if (whysperAPI && whysperAPI.onScreenshotCaptured) {
         whysperAPI.onScreenshotCaptured((event, data) => {
           if (data && data.imageData) {
+            const imageId = 'img-' + Date.now();
             // Show image thumbnail in chat
             const msgDiv = document.createElement('div');
             msgDiv.className = 'message user';
             const img = document.createElement('img');
             img.src = data.imageData;
+            img.dataset.imageId = imageId;
             img.style.maxWidth = '250px';
             img.style.maxHeight = '150px';
             img.style.borderRadius = '8px';
@@ -853,11 +907,11 @@
               chatMessages.appendChild(msgDiv);
               chatMessages.scrollTop = chatMessages.scrollHeight;
             }
-            // Persist a placeholder (images are too large for localStorage)
+            // Persist to IndexedDB + chat history
+            saveImageToDB(imageId, data.imageData).catch(() => {});
             chatHistory.push({
-              kind: 'message',
-              text: '📷 Screenshot captured — analyzing...',
-              type: 'system',
+              kind: 'image',
+              imageId: imageId,
               time: new Date().toISOString()
             });
             saveHistory();
