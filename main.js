@@ -1062,9 +1062,11 @@ class ApplicationController {
 
       // Send the captured image to the chat window so the user can see
       // what was captured alongside the AI response.
-      const imageBase64 = capture.imageBuffer.toString('base64');
+      const imageBase64 = Buffer.from(capture.imageBuffer).toString('base64');
+      const imageDataUrl = `data:${capture.mimeType || 'image/png'};base64,${imageBase64}`;
+      logger.info('Broadcasting screenshot to chat', { size: capture.imageBuffer.length });
       windowManager.broadcastToAllWindows("screenshot-captured", {
-        imageData: `data:${capture.mimeType || 'image/png'};base64,${imageBase64}`,
+        imageData: imageDataUrl,
         timestamp: Date.now()
       });
 
