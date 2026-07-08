@@ -1062,7 +1062,7 @@ class WindowManager {
     }
 
     this.windows.forEach((window, type) => {
-      if (type !== 'llmResponse') { // Don't show LLM response unless it has content
+      if (type !== 'llmResponse' && type !== 'settings') { // Don't show LLM response unless it has content; settings via Ctrl+,
         this.showOnCurrentDesktop(window);
       }
     });
@@ -1081,7 +1081,7 @@ class WindowManager {
 
   hideAllWindows() {
     this.windows.forEach((window, type) => {
-      if (type !== 'llmResponse') {
+      if (type !== 'llmResponse' && type !== 'settings') {
         window.hide();
       }
     });
