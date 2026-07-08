@@ -14,7 +14,7 @@
     "build:all": "electron-builder --mac --win --linux",
     "dist": "npm run build",
     "pack": "electron-builder --dir",
-    "clean": "rm -rf dist/",
+    "clean": "node -e \"require('fs').rmSync('dist', { recursive: true, force: true })\"",
     "rebuild": "npm run clean && npm run build",
     "release": "npm run clean && npm run build:all",
     "postinstall": "electron-builder install-app-deps"

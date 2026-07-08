@@ -735,14 +735,13 @@ class LLMService {
 
     this.applyGenerationDefaults(request);
 
-    // Add intelligent filtering system instruction
-    const intelligentPrompt = this.getIntelligentTranscriptionPrompt(activeSkill, programmingLanguage);
-    if (!intelligentPrompt) {
-      throw new Error('Failed to generate intelligent transcription prompt');
-    }
+    // Use the skill prompt as the system instruction, plus a short filter prefix
+    const skillPrompt = promptLoader.getSkillPrompt(activeSkill, programmingLanguage) || '';
+    const filterPrompt = this.getIntelligentTranscriptionPrompt(activeSkill, programmingLanguage);
+    const combinedPrompt = skillPrompt ? `${skillPrompt}\n\n${filterPrompt}` : filterPrompt;
 
     request.systemInstruction = {
-      parts: [{ text: intelligentPrompt }]
+      parts: [{ text: combinedPrompt }]
     };
 
     request.contents.push({
@@ -767,9 +766,11 @@ class LLMService {
 
     this.applyGenerationDefaults(request);
 
-  // For chat/transcription messages, DO NOT include the full skill prompt; use only the intelligent filter prompt
-  const intelligentPrompt = this.getIntelligentTranscriptionPrompt(activeSkill, programmingLanguage);
-  request.systemInstruction = { parts: [{ text: intelligentPrompt }] };
+    // Combine the skill prompt with a short filter prefix so tone, resume, and language rules are preserved
+    const skillPrompt = skillContext.skillPrompt || '';
+    const filterPrompt = this.getIntelligentTranscriptionPrompt(activeSkill, programmingLanguage);
+    const combinedPrompt = skillPrompt ? `${skillPrompt}\n\n${filterPrompt}` : filterPrompt;
+    request.systemInstruction = { parts: [{ text: combinedPrompt }] };
 
     // Add recent conversation history (excluding system messages) with validation
     const conversationContents = conversationHistory
@@ -827,57 +828,19 @@ class LLMService {
   }
 
   getIntelligentTranscriptionPrompt(activeSkill, programmingLanguage) {
-    let prompt = `# Intelligent Transcription Response System
+    let prompt = `## TRANSCRIPTION FILTERING
 
-Assume you are asked a question in ${activeSkill.toUpperCase()} mode. Your job is to intelligently respond to question/message with appropriate brevity.
-Assume you are in an interview and you need to perform best in ${activeSkill.toUpperCase()} mode.
-Always respond to the point, do not repeat the question or unnecessary information which is not related to ${activeSkill}.`;
+The user is speaking in ${activeSkill.toUpperCase()} mode. Treat each transcription as follows:
 
-    // Add programming language context if provided
+- If it is casual conversation, a greeting, or clearly unrelated to ${activeSkill}, reply briefly with something like "Yeah, I'm listening. Ask your ${activeSkill} question."
+- If it is relevant to ${activeSkill}, a follow-up, or a problem statement, answer fully using the guidelines above.`;
+
     if (programmingLanguage) {
       const lang = String(programmingLanguage).toLowerCase();
       const languageMap = { cpp: 'C++', c: 'C', python: 'Python', java: 'Java', javascript: 'JavaScript', js: 'JavaScript' };
-      const fenceTagMap = { cpp: 'cpp', c: 'c', python: 'python', java: 'java', javascript: 'javascript', js: 'javascript' };
       const languageTitle = languageMap[lang] || (lang.charAt(0).toUpperCase() + lang.slice(1));
-      const fenceTag = fenceTagMap[lang] || lang || 'text';
-      prompt += `\n\nCODING CONTEXT: Respond ONLY in ${languageTitle}. All code blocks must use triple backticks with language tag \`\`\`${fenceTag}\`\`\`. Do not include other languages unless explicitly asked.`;
+      prompt += `\n- If the input is a coding problem statement without code, produce a complete, runnable ${languageTitle} solution.`;
     }
-
-    prompt += `
-
-## Response Rules:
-
-### If the transcription is casual conversation, greetings, or NOT related to ${activeSkill}:
-- Respond with: "Yeah, I'm listening. Ask your question relevant to ${activeSkill}."
-- Or similar brief acknowledgments like: "I'm here, what's your ${activeSkill} question?"
-
-### If the transcription IS relevant to ${activeSkill} or is a follow-up question:
-- Provide a comprehensive, detailed response
-- Use bullet points, examples, and explanations
-- Focus on actionable insights and complete answers
-- Do not truncate or shorten your response
-
-### Examples of casual/irrelevant messages:
-- "Hello", "Hi there", "How are you?"
-- "What's the weather like?"
-- "I'm just testing this"
-- Random conversations not related to ${activeSkill}
-
-### Examples of relevant messages:
-- Actual questions about ${activeSkill} concepts
-- Follow-up questions to previous responses
-- Requests for clarification on ${activeSkill} topics
-- Problem-solving requests related to ${activeSkill}
-
-## Response Format:
-- Keep responses detailed
-- Use bullet points for structured answers
-- Be encouraging and helpful
-- Stay focused on ${activeSkill}
-
-If the user's input is a coding or DSA problem statement and contains no code, produce a complete, runnable solution in the selected programming language without asking for more details. Always include the final implementation in a properly tagged code block.
-
-Remember: Be intelligent about filtering - only provide detailed responses when the user actually needs help with ${activeSkill}.`;
 
     return prompt;
   }

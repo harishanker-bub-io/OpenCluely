@@ -1,5 +1,6 @@
 const fs = require('fs');
 const path = require('path');
+const config = require('./src/core/config');
 
 class PromptLoader {
   constructor() {
@@ -65,8 +66,13 @@ class PromptLoader {
     // Inject resume context if available
     const resume = this.resume;
     if (resume && resume.trim()) {
-      const resumeBlock = `\n\n## CANDIDATE BACKGROUND (use naturally in answers)\n${resume.trim()}\n\nReference this experience naturally in your answers. Use "I" and "my" — you ARE this candidate. E.g., "At Google, I...", "In my 3 years with React...", "When I built the component library..."`;
-      promptContent = promptContent + resumeBlock;
+      const resumeBlock = `## CANDIDATE BACKGROUND (use naturally in answers)
+${resume.trim()}
+
+Reference this experience naturally in your answers. Use "I" and "my" — you ARE this candidate. E.g., "At Google, I...", "In my 3 years with React...", "When I built the component library..."`;
+      promptContent = promptContent.replace('{{RESUME_CONTEXT}}', resumeBlock);
+    } else {
+      promptContent = promptContent.replace('{{RESUME_CONTEXT}}', 'No specific background provided. Answer as a general strong candidate.');
     }
 
     // Inject programming language if provided and skill requires it
@@ -114,7 +120,8 @@ STRICT REQUIREMENTS:
 - Avoid unnecessary verbosity; focus on correctness, clarity, and efficiency.`;
         break;
       default:
-        languageInjection = `\n\n## PROGRAMMING LANGUAGE: ${languageUpper}\nAll code and examples must be in ${languageTitle}. Use code fences with tag: \`\`\`${fenceTag}\`\`\`.`;
+        languageInjection = `\n\n## PROGRAMMING LANGUAGE: ${languageUpper}
+All code and examples must be in ${languageTitle}. Use code fences with tag: \`\`\`${fenceTag}\`\`\`.`;
     }
 
     return promptContent + languageInjection;
@@ -168,7 +175,7 @@ STRICT REQUIREMENTS:
     const skillPrompt = this.getSkillPrompt(normalizedSkillName, programmingLanguage);
     
     const requestConfig = {
-      model: 'gemini-pro', // or your preferred Gemini model
+      model: config.get('llm.gemini.model') || 'gemini-3.1-flash-lite',
       contents: [],
       systemInstruction: null,
       generationConfig: {
@@ -383,7 +390,7 @@ STRICT REQUIREMENTS:
     if (!this.promptsLoaded) {
       this.loadPrompts();
     }
-    return ['dsa'];
+    return Array.from(this.prompts.keys());
   }
 
   /**
