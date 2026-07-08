@@ -128,13 +128,6 @@ class ChatWindowUI {
                     this.addMessage(`📷 OCR Result: ${data.text}`, 'transcription');
                 }
             });
-
-            // Display captured screenshot in the chat
-            window.electronAPI.onScreenshotCaptured((event, data) => {
-                if (data && data.imageData) {
-                    this.addImageMessage(data.imageData);
-                }
-            });
             
             window.electronAPI.onOcrError((event, data) => {
                 this.addMessage(`OCR Error: ${data.error}`, 'error');
@@ -379,44 +372,6 @@ class ChatWindowUI {
         this.elements.chatMessages.appendChild(messageDiv);
         
         // Auto-scroll to bottom
-        this.elements.chatMessages.scrollTop = this.elements.chatMessages.scrollHeight;
-    }
-
-    addImageMessage(imageDataUrl) {
-        if (!this.elements.chatMessages) return;
-
-        const messageDiv = document.createElement('div');
-        messageDiv.className = 'message user image-message';
-
-        const timeDiv = document.createElement('div');
-        timeDiv.className = 'message-time';
-        timeDiv.textContent = new Date().toLocaleTimeString();
-
-        const img = document.createElement('img');
-        img.src = imageDataUrl;
-        img.style.maxWidth = '300px';
-        img.style.maxHeight = '200px';
-        img.style.borderRadius = '8px';
-        img.style.cursor = 'pointer';
-        img.title = 'Captured screenshot';
-        img.addEventListener('click', () => {
-            // Open full-size in a new Electron window or just expand
-            const win = window.open(imageDataUrl, '_blank');
-            if (win) win.focus();
-        });
-
-        messageDiv.appendChild(timeDiv);
-        messageDiv.appendChild(img);
-        this.elements.chatMessages.appendChild(messageDiv);
-
-        // Add a "📷 Screenshot captured" label below the image
-        const labelDiv = document.createElement('div');
-        labelDiv.className = 'message system';
-        labelDiv.style.opacity = '0.6';
-        labelDiv.style.fontSize = '12px';
-        labelDiv.textContent = '📷 Screenshot captured — analyzing...';
-        this.elements.chatMessages.appendChild(labelDiv);
-
         this.elements.chatMessages.scrollTop = this.elements.chatMessages.scrollHeight;
     }
 
