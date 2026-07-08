@@ -103,6 +103,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   onSessionEvent: (callback) => ipcRenderer.on('session-event', callback),
   onSessionCleared: (callback) => ipcRenderer.on('session-cleared', callback),
   onOcrCompleted: (callback) => ipcRenderer.on('ocr-completed', callback),
+  onScreenshotCaptured: (callback) => ipcRenderer.on('screenshot-captured', callback),
   onOcrError: (callback) => ipcRenderer.on('ocr-error', callback),
   onLlmResponse: (callback) => ipcRenderer.on('llm-response', callback),
   onLlmError: (callback) => ipcRenderer.on('llm-error', callback),

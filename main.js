@@ -1060,6 +1060,14 @@ class ApplicationController {
         return;
       }
 
+      // Send the captured image to the chat window so the user can see
+      // what was captured alongside the AI response.
+      const imageBase64 = capture.imageBuffer.toString('base64');
+      windowManager.broadcastToAllWindows("screenshot-captured", {
+        imageData: `data:${capture.mimeType || 'image/png'};base64,${imageBase64}`,
+        timestamp: Date.now()
+      });
+
       // Use image directly with LLM and active skill; do not send chat messages here
       const sessionHistory = sessionManager.getOptimizedHistory();
 

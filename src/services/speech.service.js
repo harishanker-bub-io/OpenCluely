@@ -665,6 +665,8 @@ class SpeechService extends EventEmitter {
     this.recognizer.canceled = (s, e) => {
       logger.warn('Recognition session canceled', {
         reason: e.reason,
+        reasonName: sdk.CancellationReason ? 
+          Object.keys(sdk.CancellationReason).find(k => sdk.CancellationReason[k] === e.reason) : 'unknown',
         errorCode: e.errorCode,
         errorDetails: e.errorDetails
       });
@@ -691,7 +693,8 @@ class SpeechService extends EventEmitter {
       logger.info('Recognition session started', { sessionId: e.sessionId });
     };
 
-    this.recognizer.sessionStopped = () => {
+    this.recognizer.sessionStopped = (s, e) => {
+      logger.info('Recognition session stopped by service', { sessionId: e ? e.sessionId : 'unknown' });
       this.stopRecording();
     };
 
