@@ -840,8 +840,7 @@
       if (whysperAPI && whysperAPI.onScreenshotCaptured) {
         whysperAPI.onScreenshotCaptured((event, data) => {
           if (data && data.imageData) {
-            addMessage('📷 Screenshot captured — analyzing...', 'system');
-            // Also show a small thumbnail
+            // Show image thumbnail in chat
             const msgDiv = document.createElement('div');
             msgDiv.className = 'message user';
             const img = document.createElement('img');
@@ -854,6 +853,14 @@
               chatMessages.appendChild(msgDiv);
               chatMessages.scrollTop = chatMessages.scrollHeight;
             }
+            // Persist a placeholder (images are too large for localStorage)
+            chatHistory.push({
+              kind: 'message',
+              text: '📷 Screenshot captured — analyzing...',
+              type: 'system',
+              time: new Date().toISOString()
+            });
+            saveHistory();
           }
         });
       }
