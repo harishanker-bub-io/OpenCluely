@@ -186,7 +186,8 @@ document.addEventListener('DOMContentLoaded', () => {
         whisperLanguageInput,
         whisperSegmentMsInput,
         geminiKeyInput,
-        windowGapInput
+        windowGapInput,
+        resumeInput
     ];
 
     inputs.forEach(input => {
