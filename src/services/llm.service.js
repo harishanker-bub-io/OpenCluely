@@ -279,7 +279,7 @@ class LLMService {
       let fullText;
       
       if (this.provider === 'groq') {
-        fullText = await this._executeGroqImageStream(imageBuffer, mimeType, activeSkill, programmingLanguage, onDelta);
+        fullText = await this._executeGroqImageStream(imageBuffer, mimeType, activeSkill, programmingLanguage, sessionMemory, onDelta);
       } else {
         const skillPrompt = promptLoader.getSkillPrompt(activeSkill, programmingLanguage) || '';
         const base64 = imageBuffer.toString('base64');
@@ -1299,7 +1299,7 @@ Remember: Be intelligent about filtering - only provide detailed responses when 
     return fullText.trim();
   }
 
-  _buildGroqImageMessages(imageBuffer, mimeType, activeSkill, programmingLanguage) {
+  _buildGroqImageMessages(imageBuffer, mimeType, activeSkill, programmingLanguage, sessionMemory = []) {
     const skillPrompt = promptLoader.getSkillPrompt(activeSkill, programmingLanguage) || '';
     const base64 = Buffer.isBuffer(imageBuffer) 
       ? imageBuffer.toString('base64') 
@@ -1309,6 +1309,17 @@ Remember: Be intelligent about filtering - only provide detailed responses when 
     const messages = [];
     if (skillPrompt.trim()) {
       messages.push({ role: 'system', content: skillPrompt.trim() });
+    }
+
+    // Add conversation history like text methods do
+    if (Array.isArray(sessionMemory) && sessionMemory.length > 0) {
+      for (const entry of sessionMemory) {
+        const role = entry.role === 'model' ? 'assistant' : (entry.role === 'user' ? 'user' : entry.role);
+        const content = entry.content || entry.text || '';
+        if (content && (role === 'user' || role === 'assistant')) {
+          messages.push({ role, content });
+        }
+      }
     }
 
     messages.push({
@@ -1322,8 +1333,8 @@ Remember: Be intelligent about filtering - only provide detailed responses when 
     return messages;
   }
 
-  async _executeGroqImageStream(imageBuffer, mimeType, activeSkill, programmingLanguage, onDelta) {
-    const messages = this._buildGroqImageMessages(imageBuffer, mimeType, activeSkill, programmingLanguage);
+  async _executeGroqImageStream(imageBuffer, mimeType, activeSkill, programmingLanguage, sessionMemory = [], onDelta) {
+    const messages = this._buildGroqImageMessages(imageBuffer, mimeType, activeSkill, programmingLanguage, sessionMemory);
     const genConfig = config.get('llm.groq.generation') || {};
     
     const groqRequest = {

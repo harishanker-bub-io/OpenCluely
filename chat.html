@@ -822,8 +822,13 @@
         if (chatMessages) chatMessages.innerHTML = '';
         // Clear IndexedDB images too
         if (imageDB) {
-          const tx = imageDB.transaction('screenshots', 'readwrite');
-          tx.objectStore('screenshots').clear();
+          try {
+            const tx = imageDB.transaction('screenshots', 'readwrite');
+            tx.objectStore('screenshots').clear();
+            tx.onerror = () => console.warn('Failed to clear IndexedDB images');
+          } catch (e) {
+            console.warn('IndexedDB clear error:', e);
+          }
         }
       }
 
