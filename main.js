@@ -365,7 +365,7 @@ class ApplicationController {
       "CommandOrControl+Shift+I": () => windowManager.toggleInteraction(),
       "CommandOrControl+Shift+C": () => windowManager.switchToWindow("chat"),
       "CommandOrControl+Shift+\\": () => this.clearSessionMemory(),
-      "CommandOrControl+,": () => windowManager.showSettings(),
+      "CommandOrControl+,": () => windowManager.toggleSettings(),
       "Alt+A": () => windowManager.toggleInteraction(),
       "Alt+R": () => this.toggleSpeechRecognition(),
       "CommandOrControl+Shift+T": () => windowManager.forceAlwaysOnTopForAllWindows(),

@@ -1360,6 +1360,15 @@ class WindowManager {
     }
   }
 
+  toggleSettings() {
+    const settingsWindow = this.windows.get('settings');
+    if (settingsWindow && settingsWindow.isVisible()) {
+      this.hideSettings();
+    } else {
+      this.showSettings();
+    }
+  }
+
   async showOnboarding() {
     if (this.isScreenBeingShared) return null;
 
