@@ -424,6 +424,7 @@ class SpeechService extends EventEmitter {
     this.pendingFinal = false;
     this.audioProgram = null;
     this.whisperCommand = null;
+    this.useRendererCapture = false;
     this._resetVadState();
 
     this.initializeClient();
@@ -578,19 +579,20 @@ class SpeechService extends EventEmitter {
     }
 
     this.isRecording = true;
-    this.emit('recording-started');
-    this.emit('status', 'Azure recording started');
     this._cleanup();
 
     try {
-      // On Windows, sox cannot reliably access the default audio device
-      // ("Sorry, there is no default audio device configured"). Use the
-      // Azure Speech SDK's built-in microphone input instead, which talks
-      // to the Windows audio subsystem directly. On macOS/Linux we keep
-      // the push-stream approach with sox/arecord for local capture.
+      // On Windows, the Azure Speech SDK's fromDefaultMicrophoneInput() uses
+      // native WASAPI which may be blocked by Windows Privacy settings for
+      // non-installed Electron apps. Instead, use the same renderer-based
+      // getUserMedia capture path that Whisper uses on Windows — the Electron
+      // WebRTC permission is already granted and reliably works.
+      // On macOS/Linux we keep the push-stream approach with sox/arecord.
       if (process.platform === 'win32') {
-        this.audioConfig = sdk.AudioConfig.fromDefaultMicrophoneInput();
-        logger.info('Azure recording configured with native Windows microphone');
+        this.pushStream = sdk.AudioInputStream.createPushStream();
+        this.audioConfig = sdk.AudioConfig.fromStreamInput(this.pushStream);
+        this.useRendererCapture = true;
+        logger.info('Azure recording configured with renderer microphone capture (Windows)');
       } else {
         this.pushStream = sdk.AudioInputStream.createPushStream();
         this.audioConfig = sdk.AudioConfig.fromStreamInput(this.pushStream);
@@ -648,13 +650,19 @@ class SpeechService extends EventEmitter {
     // Warn the user if no audio is captured within 5 seconds. On Windows
     // this usually means the default recording device is a virtual mic
     // (e.g. Steam Streaming Microphone) instead of the physical one.
+    // However, if using renderer capture, allow more time for getUserMedia
+    // permission dialog and audio stream setup.
+    const silenceTimeoutMs = this.useRendererCapture ? 15000 : 5000;
     this._azureSilenceTimer = setTimeout(() => {
       if (!this._azureHeardSpeech && this.isRecording) {
-        logger.warn('No audio detected from default microphone after 5 seconds');
-        this.emit('status', 'No audio detected — check your default recording device in Windows Sound settings');
-        this.emit('error', 'No microphone audio detected. Right-click the speaker icon > Sounds > Recording tab, and set your physical microphone as "Default Device".');
+        logger.warn('No audio detected from microphone after ' + silenceTimeoutMs + 'ms', {
+          useRendererCapture: this.useRendererCapture,
+          pushStreamOk: !!this.pushStream
+        });
+        this.emit('status', 'No audio detected — check microphone permissions and try again');
+        this.emit('error', 'No microphone audio detected. Check that your microphone is enabled and not muted.');
       }
-    }, 5000);
+    }, silenceTimeoutMs);
 
     this.recognizer.canceled = (s, e) => {
       logger.warn('Recognition session canceled', {
@@ -699,8 +707,14 @@ class SpeechService extends EventEmitter {
       () => {
         clearTimeout(startTimeout);
         logger.info('Continuous Azure speech recognition started successfully');
-        if (global.windowManager) {
-          global.windowManager.handleRecordingStarted();
+        this.emit('recording-started');
+        this.emit('status', 'Azure recording started');
+        // For renderer capture (Windows), ensure UI knows to start capturing
+        if (this.useRendererCapture) {
+          logger.debug('Requesting UI to start audio capture for Azure', { platform: process.platform });
+          if (global.windowManager) {
+            global.windowManager.handleRecordingStarted();
+          }
         }
       },
       (error) => {
@@ -809,14 +823,28 @@ class SpeechService extends EventEmitter {
    * the current Whisper segment buffer.
    */
   handleAudioChunkFromRenderer(chunk) {
-    if (!this.isRecording || this.provider !== 'whisper' || !this.useRendererCapture) {
+    if (!this.isRecording || !this.useRendererCapture) {
       return;
     }
     if (!chunk || !chunk.length) {
       return;
     }
     const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-    this._ingestWhisperAudio(buffer);
+    if (this.provider === 'azure') {
+      if (!this._audioChunkCount) this._audioChunkCount = 0;
+      this._audioChunkCount++;
+      if (this._audioChunkCount % 10 === 0) {
+        logger.debug('Azure: received audio chunks from renderer', { 
+          count: this._audioChunkCount,
+          lastChunkBytes: buffer.length 
+        });
+      }
+      this._handleAudioChunk(buffer);
+      return;
+    }
+    if (this.provider === 'whisper') {
+      this._ingestWhisperAudio(buffer);
+    }
   }
 
   /**
@@ -1047,11 +1075,13 @@ class SpeechService extends EventEmitter {
 
     if (this.audioConfig) {
       try {
-        if (typeof this.audioConfig.close === 'function') {
+        // AudioConfig from fromStreamInput() doesn't have a close method; only
+        // the native microphone input does. Guard against the error.
+        if (this.audioConfig && typeof this.audioConfig.close === 'function') {
           this.audioConfig.close();
         }
       } catch (error) {
-        logger.error('Error closing audio config', { error: error.message });
+        logger.debug('Audio config close not available or failed', { error: error.message });
       }
       this.audioConfig = null;
     }

@@ -639,12 +639,12 @@ class MainWindowUI {
         if (this.micButton) {
             this.micButton.classList.add('recording');
         }
-        // On Windows and macOS, Whisper audio is captured here in the renderer
-        // (Web Audio API) rather than the main process: Windows lacks sox/rec/
-        // arecord, and macOS avoids an unbundled Homebrew `sox`. Must match the
-        // main process's useRendererCapture gate (speech.service.js). Linux uses
-        // the native recorder. navigator.userAgentData is preferred when present
-        // since navigator.platform is deprecated.
+        // On Windows and macOS, capture microphone audio in the renderer using Web Audio API
+        // (getUserMedia). This works for both Azure and Whisper, avoiding:
+        // - Windows: sox/rec/arecord unavailable (node-record-lpcm16 fails)
+        // - Windows: Azure native WASAPI blocked by Privacy settings on non-installed apps
+        // - macOS: Avoiding unbundled Homebrew sox dependency + TCC permission issues
+        // Linux uses the native recorder directly (renderer capture not needed).
         const platform = (typeof navigator !== 'undefined' &&
           ((navigator.userAgentData && navigator.userAgentData.platform) ||
             navigator.platform || '')).toLowerCase();
@@ -673,6 +673,7 @@ class MainWindowUI {
         try {
             this._stopRendererAudioCapture();
 
+            logger.info('Requesting microphone access via getUserMedia', { component: 'MainWindowUI' });
             const stream = await navigator.mediaDevices.getUserMedia({
                 audio: {
                     echoCancellation: true,
@@ -681,18 +682,28 @@ class MainWindowUI {
                     sampleRate: { ideal: 16000 }
                 }
             });
+            logger.info('Microphone stream obtained successfully', { 
+                component: 'MainWindowUI',
+                tracks: stream.getTracks().length
+            });
             this._mediaStream = stream;
 
             const audioContext = new (window.AudioContext || window.webkitAudioContext)({
                 sampleRate: 16000
             });
             this._audioContext = audioContext;
+            logger.info('AudioContext created', { 
+                component: 'MainWindowUI',
+                sampleRate: audioContext.sampleRate,
+                state: audioContext.state
+            });
 
             const source = audioContext.createMediaStreamSource(stream);
             const bufferSize = 4096;
             const scriptNode = audioContext.createScriptProcessor(bufferSize, 1, 1);
             this._scriptNode = scriptNode;
 
+            let audioChunkCount = 0;
             scriptNode.onaudioprocess = (event) => {
                 if (!this.isRecording || !window.electronAPI || !window.electronAPI.sendAudioChunk) {
                     return;
@@ -703,17 +714,26 @@ class MainWindowUI {
                     const s = Math.max(-1, Math.min(1, inputData[i]));
                     pcm16[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
                 }
+                audioChunkCount++;
+                if (audioChunkCount % 10 === 0) {
+                    logger.debug('Audio chunk sent to main process', {
+                        component: 'MainWindowUI',
+                        chunk: audioChunkCount,
+                        bytes: pcm16.buffer.byteLength
+                    });
+                }
                 window.electronAPI.sendAudioChunk(pcm16.buffer);
             };
 
             source.connect(scriptNode);
             scriptNode.connect(audioContext.destination);
 
-            logger.info('Renderer audio capture started', { component: 'MainWindowUI' });
+            logger.info('Renderer audio capture started successfully', { component: 'MainWindowUI' });
         } catch (error) {
             logger.error('Failed to start renderer audio capture', {
                 component: 'MainWindowUI',
-                error: error.message
+                error: error.message,
+                name: error.name
             });
             // Notify main process so it can stop the recording state
             try {
