@@ -582,17 +582,15 @@ class SpeechService extends EventEmitter {
     this._cleanup();
 
     try {
-      // On Windows, the Azure Speech SDK's fromDefaultMicrophoneInput() uses
-      // native WASAPI which may be blocked by Windows Privacy settings for
-      // non-installed Electron apps. Instead, use the same renderer-based
-      // getUserMedia capture path that Whisper uses on Windows — the Electron
-      // WebRTC permission is already granted and reliably works.
+      // On Windows, use Azure Speech SDK's built-in microphone input
+      // (fromDefaultMicrophoneInput) which talks directly to WASAPI.
+      // This is the most reliable path — no sox, no renderer capture,
+      // no IPC overhead. The only prerequisite: the correct microphone
+      // must be set as the default recording device in Windows Sound settings.
       // On macOS/Linux we keep the push-stream approach with sox/arecord.
       if (process.platform === 'win32') {
-        this.pushStream = sdk.AudioInputStream.createPushStream();
-        this.audioConfig = sdk.AudioConfig.fromStreamInput(this.pushStream);
-        this.useRendererCapture = true;
-        logger.info('Azure recording configured with renderer microphone capture (Windows)');
+        this.audioConfig = sdk.AudioConfig.fromDefaultMicrophoneInput();
+        logger.info('Azure recording configured with native Windows microphone');
       } else {
         this.pushStream = sdk.AudioInputStream.createPushStream();
         this.audioConfig = sdk.AudioConfig.fromStreamInput(this.pushStream);
