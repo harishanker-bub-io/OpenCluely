@@ -520,7 +520,7 @@ class ChatWindowUI {
             }
             
             if (markdownLib && markdownLib.toHTML) {
-                return markdownLib.toHTML(text);
+                return markdownLib.toHTML(text, 'Maruku');
             } else {
                 logger.warn('Markdown library not available, falling back to basic formatting');
                 // Fallback to basic formatting

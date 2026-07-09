@@ -169,7 +169,7 @@
       
       .message.assistant .message-text {
         /* Removed all height restrictions and overflow hidden */
-        white-space: pre-wrap;
+        white-space: normal;
         word-wrap: break-word;
         word-break: break-word;
         overflow-wrap: break-word;
@@ -1076,13 +1076,13 @@
         }
       }
 
-      // Markdown formatter using markdown.js library
+      // Markdown formatter using markdown.js library (Maruku dialect for table support)
       function formatMarkdown(text) {
         if (!text) return '';
         
         try {
           if (typeof markdown !== 'undefined' && markdown.toHTML) {
-            return markdown.toHTML(text);
+            return markdown.toHTML(text, 'Maruku');
           } else {
             console.warn('Markdown library not loaded, falling back to basic formatting');
             return text
