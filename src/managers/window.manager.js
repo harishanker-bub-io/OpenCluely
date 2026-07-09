@@ -111,9 +111,10 @@ class WindowManager {
     logger.info('Initializing application windows', { showMainWindow });
     
     try {
-      // Pass autoShow so the main window doesn't flash visible during
-      // first-run onboarding before the user has configured API keys.
-      await this.createMainWindow({ autoShow: showMainWindow });
+      // Never auto-show from createMainWindow — showMainWindow() is the
+      // single entry point that runs after ALL windows are created and
+      // screen tracking is set up, so positioning is reliable.
+      await this.createMainWindow({ autoShow: false });
       await this.createChatWindow();
       await this.createLLMResponseWindow();
       await this.createSettingsWindow();
@@ -143,6 +144,10 @@ class WindowManager {
   async showMainWindow() {
     const mainWindow = this.windows.get('main');
     if (!mainWindow) return;
+    
+    // Re-apply position before showing — on Windows, setPosition on a hidden
+    // window may be ignored, so we position now that the window is ready.
+    this.positionWindow(mainWindow, 'main');
     
     // Immediate always-on-top enforcement for main window
     if (process.platform === 'darwin') {
@@ -205,6 +210,8 @@ class WindowManager {
     if (autoShow) {
       // Wait for app to fully initialize and detect current desktop
       setTimeout(() => {
+        // Re-apply position now that the window is ready to show
+        this.positionWindow(window, 'main');
         this.showOnCurrentDesktop(window);
         // Additional enforcement after showing
         setTimeout(() => {
