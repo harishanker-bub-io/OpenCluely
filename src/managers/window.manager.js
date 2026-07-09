@@ -35,6 +35,7 @@ class WindowManager {
     this.bindWindows = true; // Enable window binding by default
     this.windowGap = 10; // Small gap between windows
     this.boundWindowsPosition = { x: 0, y: 0 }; // Track position of bound windows
+    this.currentOpacity = 1.0; // Full opacity by default
     
     this.windowConfigs = {
       main: {
@@ -1836,6 +1837,25 @@ class WindowManager {
     
     logger.debug('Window gap updated', { gap: this.windowGap });
     return this.windowGap;
+  }
+
+  setAllWindowsOpacity(value) {
+    // Clamp to [0, 1] — 0 = fully transparent, 1 = fully opaque
+    const opacity = Math.min(1, Math.max(0, parseFloat(value) || 1));
+    this.currentOpacity = opacity;
+    const targets = ['main', 'chat', 'llmResponse'];
+    targets.forEach((name) => {
+      const win = this.windows.get(name);
+      if (win && !win.isDestroyed()) {
+        try {
+          win.setOpacity(opacity);
+        } catch (e) {
+          logger.warn('setOpacity failed for window', { name, error: e.message });
+        }
+      }
+    });
+    logger.debug('Window opacity updated', { opacity });
+    return opacity;
   }
 
   showChatWindow() {

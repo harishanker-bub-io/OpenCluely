@@ -23,25 +23,25 @@
         height: 100vh;
         background: linear-gradient(
           135deg,
-          rgba(0, 0, 0, 0.3) 0%,
-          rgba(20, 20, 20, 0.4) 100%
+          rgba(0, 0, 0, calc(0.3 + var(--app-opacity, 1) * 0.7)) 0%,
+          rgba(20, 20, 20, calc(0.4 + var(--app-opacity, 1) * 0.6)) 100%
         );
         backdrop-filter: blur(25px);
         border-radius: 12px;
-        border: 1px solid rgba(255, 255, 255, 0.1);
-        box-shadow: 0 4px 25px rgba(0, 0, 0, 0.15);
+        border: 1px solid rgba(255, 255, 255, calc(0.1 * var(--app-opacity, 1)));
+        box-shadow: 0 4px 25px rgba(0, 0, 0, calc(0.15 * var(--app-opacity, 1)));
         display: flex;
         flex-direction: column;
         -webkit-app-region: drag;
       }
       .chat-header {
         padding: 16px 20px;
-        border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+        border-bottom: 1px solid rgba(255, 255, 255, calc(0.08 * var(--app-opacity, 1)));
         display: flex;
         align-items: center;
         justify-content: space-between;
         -webkit-app-region: drag;
-        background: rgba(0, 0, 0, 0.2);
+        background: rgba(0, 0, 0, calc(0.2 * var(--app-opacity, 1)));
         backdrop-filter: blur(10px);
         cursor: move;
         flex-shrink: 0;
@@ -723,6 +723,15 @@
     <script>
       // Use electronAPI from preload script instead of direct require
       const whysperAPI = window.electronAPI;
+
+      // Keep CSS --app-opacity in sync with shortcuts
+      if (whysperAPI && whysperAPI.receive) {
+        whysperAPI.receive('opacity-changed', (_event, data) => {
+          if (data && data.opacity !== undefined) {
+            document.documentElement.style.setProperty('--app-opacity', data.opacity);
+          }
+        });
+      }
 
       const chatMessages = document.getElementById('chatMessages');
       const recordingIndicator = document.getElementById('recordingIndicator');

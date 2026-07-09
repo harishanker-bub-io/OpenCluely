@@ -437,6 +437,13 @@ class MainWindowUI {
                 this.applyMicVisibility();
             });
 
+            // Keep CSS --app-opacity in sync with shortcuts
+            window.electronAPI.receive('opacity-changed', (event, data) => {
+                if (data && data.opacity !== undefined) {
+                    document.documentElement.style.setProperty('--app-opacity', data.opacity);
+                }
+            });
+
             // Listen for coding language changes from other windows
             window.electronAPI.onCodingLanguageChanged((event, data) => {
                 if (data && data.language && this.languageSelect) {

@@ -17,6 +17,8 @@ document.addEventListener('DOMContentLoaded', () => {
     const groqKeyInput = document.getElementById('groqKey');
     const llmProviderSelect = document.getElementById('llmProvider');
     const windowGapInput = document.getElementById('windowGap');
+    const windowOpacitySlider = document.getElementById('windowOpacity');
+    const opacityValueLabel = document.getElementById('opacityValue');
     const codingLanguageSelect = document.getElementById('codingLanguage');
     const activeSkillSelect = document.getElementById('activeSkill');
     const resumeInput = document.getElementById('resumeInput');
@@ -88,6 +90,12 @@ document.addEventListener('DOMContentLoaded', () => {
         if (groqKeyInput) groqKeyInput.value = settings.groqKey || '';
         if (llmProviderSelect) llmProviderSelect.value = settings.llmProvider || 'gemini';
         if (windowGapInput) windowGapInput.value = settings.windowGap || '';
+        if (windowOpacitySlider && settings.windowOpacity !== undefined) {
+            windowOpacitySlider.value = settings.windowOpacity;
+            if (opacityValueLabel) opacityValueLabel.textContent = parseFloat(settings.windowOpacity).toFixed(2);
+            // Also apply to the settings window's own background
+            document.documentElement.style.setProperty('--app-opacity', settings.windowOpacity);
+        }
 
         // Set C++ as default if no coding language is specified
         if (codingLanguageSelect) {
@@ -150,6 +158,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (codingLanguageSelect) settings.codingLanguage = codingLanguageSelect.value;
         if (activeSkillSelect) settings.activeSkill = activeSkillSelect.value;
         if (resumeInput) settings.resume = resumeInput.value;
+        if (windowOpacitySlider) settings.windowOpacity = parseFloat(windowOpacitySlider.value);
         
         window.api.send('save-settings', settings);
     };
@@ -235,6 +244,30 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     updateSpeechFieldStates();
+
+    // Opacity slider: live preview while dragging, persist on release
+    if (windowOpacitySlider) {
+        windowOpacitySlider.addEventListener('input', () => {
+            const val = parseFloat(windowOpacitySlider.value);
+            if (opacityValueLabel) opacityValueLabel.textContent = val.toFixed(2);
+            if (window.electronAPI && window.electronAPI.saveSettings) {
+                window.electronAPI.saveSettings({ windowOpacity: val });
+            }
+        });
+        windowOpacitySlider.addEventListener('change', () => {
+            saveSettings();
+        });
+    }
+
+    // Keep slider in sync when opacity is changed via keyboard shortcuts
+    if (window.electronAPI && window.electronAPI.receive) {
+        window.electronAPI.receive('opacity-changed', (_event, data) => {
+            if (data && data.opacity !== undefined && windowOpacitySlider) {
+                windowOpacitySlider.value = data.opacity;
+                if (opacityValueLabel) opacityValueLabel.textContent = parseFloat(data.opacity).toFixed(2);
+            }
+        });
+    }
 
     // LLM provider field toggle
     const updateLLMFieldStates = () => {

@@ -118,6 +118,7 @@ class ApplicationController {
   this.codingLanguage = "cpp";
     this.resume = "";
     this.speechAvailable = false;
+    this.windowOpacity = 1.0;
 
     // Utterance coalescing: VAD emits a transcript per natural pause, but a
     // single spoken question can still arrive as a few fragments (mid-thought
@@ -163,6 +164,7 @@ class ApplicationController {
         if (data.resume !== undefined) this.resume = data.resume;
         if (data.codingLanguage) this.codingLanguage = data.codingLanguage;
         if (data.activeSkill) this.activeSkill = data.activeSkill;
+        if (data.windowOpacity !== undefined) this.windowOpacity = data.windowOpacity;
         // Also feed resume to prompt-loader
         const { promptLoader } = require('./prompt-loader');
         promptLoader.setResume(this.resume || '');
@@ -277,6 +279,11 @@ class ApplicationController {
       const isFirstRun = status.needsOnboarding;
 
       await windowManager.initializeWindows({ showMainWindow: !isFirstRun });
+      windowManager.setAllWindowsOpacity(this.windowOpacity);
+      // Defer broadcast so renderer scripts have time to register IPC listeners
+      setTimeout(() => {
+        windowManager.broadcastToAllWindows('opacity-changed', { opacity: this.windowOpacity });
+      }, 500);
       this.setupGlobalShortcuts();
 
       // Initialize default stealth mode with terminal icon
@@ -348,6 +355,8 @@ class ApplicationController {
       "CommandOrControl+Shift+I": () => windowManager.toggleInteraction(),
       "CommandOrControl+Shift+C": () => windowManager.switchToWindow("chat"),
       "CommandOrControl+Shift+\\": () => this.clearSessionMemory(),
+      "CommandOrControl+Shift+[": () => this.adjustOpacity(-0.05),
+      "CommandOrControl+Shift+]": () => this.adjustOpacity(0.05),
       "CommandOrControl+,": () => windowManager.toggleSettings(),
       "Alt+A": () => windowManager.toggleInteraction(),
       "Alt+R": () => this.toggleSpeechRecognition(),
@@ -945,6 +954,21 @@ class ApplicationController {
     }
   }
 
+  adjustOpacity(delta) {
+    const current = this.windowOpacity !== undefined ? this.windowOpacity : 1.0;
+    const next = Math.min(1, Math.max(0, Math.round((current + delta) * 100) / 100));
+    this.windowOpacity = next;
+    windowManager.setAllWindowsOpacity(next);
+    this._saveUserSettings({
+      resume: this.resume,
+      codingLanguage: this.codingLanguage,
+      activeSkill: this.activeSkill,
+      windowOpacity: this.windowOpacity,
+    });
+    windowManager.broadcastToAllWindows('opacity-changed', { opacity: next });
+    logger.info('Window opacity adjusted via shortcut', { opacity: next });
+  }
+
   handleUpArrow() {
     const isInteractive = windowManager.getWindowStats().isInteractive;
 
@@ -1520,6 +1544,7 @@ class ApplicationController {
       appIcon: this.appIcon || "terminal",
       selectedIcon: this.appIcon || "terminal",
       windowGap: windowManager.windowGap,
+      windowOpacity: this.windowOpacity !== undefined ? this.windowOpacity : 1.0,
 
       speechProvider: speechService.provider || "whisper",
       azureKey: process.env.AZURE_SPEECH_KEY || "",
@@ -1567,6 +1592,13 @@ class ApplicationController {
       if (settings.windowGap !== undefined) {
         const gap = Number(settings.windowGap);
         if (Number.isFinite(gap)) windowManager.setWindowGap(gap);
+      }
+      if (settings.windowOpacity !== undefined) {
+        const opacity = parseFloat(settings.windowOpacity);
+        if (Number.isFinite(opacity)) {
+          this.windowOpacity = Math.min(1, Math.max(0, opacity));
+          windowManager.setAllWindowsOpacity(this.windowOpacity);
+        }
       }
 
       // ── Persist provider / API-key fields back to .env ──
@@ -1676,11 +1708,12 @@ class ApplicationController {
         persistedEnvKeys: persistedKeys
       });
 
-      // Persist user settings (resume, skill, language) to disk
+      // Persist user settings (resume, skill, language, opacity) to disk
       this._saveUserSettings({
         resume: this.resume,
         codingLanguage: this.codingLanguage,
         activeSkill: this.activeSkill,
+        windowOpacity: this.windowOpacity,
       });
 
       return { success: true, persistedEnvKeys: persistedKeys };

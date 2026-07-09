@@ -19,8 +19,8 @@
         height: 28px;
         background: linear-gradient(
           135deg,
-          rgba(0, 0, 0, 0.4) 0%,
-          rgba(20, 20, 20, 0.5) 100%
+          rgba(0, 0, 0, calc(0.4 + var(--app-opacity, 1) * 0.6)) 0%,
+          rgba(20, 20, 20, calc(0.5 + var(--app-opacity, 1) * 0.5)) 100%
         );
         backdrop-filter: blur(20px);
         border-radius: 8px;

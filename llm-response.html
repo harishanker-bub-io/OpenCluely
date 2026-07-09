@@ -14,7 +14,9 @@
         .mr-2 { margin-right: 0.5rem; }
 
         body {
-            background: linear-gradient(135deg, rgba(0, 0, 0, 0.4) 0%, rgba(20, 20, 20, 0.5) 100%);;
+            background: linear-gradient(135deg,
+                rgba(0, 0, 0, calc(0.4 + var(--app-opacity, 1) * 0.6)) 0%,
+                rgba(20, 20, 20, calc(0.5 + var(--app-opacity, 1) * 0.5)) 100%);
             -webkit-app-region: no-drag;
             color: white;
             margin: 0;
@@ -526,6 +528,13 @@
             // Set up event listeners using electronAPI from preload script
             if (window.electronAPI) {
                 console.log('[LLM-RESPONSE] Setting up IPC listeners...');
+
+                // Keep CSS --app-opacity in sync with shortcuts
+                window.electronAPI.receive('opacity-changed', (_event, data) => {
+                    if (data && data.opacity !== undefined) {
+                        document.documentElement.style.setProperty('--app-opacity', data.opacity);
+                    }
+                });
                 
                 // Set up show-loading event listener
                 window.electronAPI.onShowLoading(() => {
