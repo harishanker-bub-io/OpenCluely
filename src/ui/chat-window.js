@@ -371,8 +371,10 @@ class ChatWindowUI {
         
         this.elements.chatMessages.appendChild(messageDiv);
         
-        // Auto-scroll to bottom
-        this.elements.chatMessages.scrollTop = this.elements.chatMessages.scrollHeight;
+        // Only auto-scroll for non-assistant messages (responses handle their own scroll)
+        if (type !== 'assistant') {
+            this.elements.chatMessages.scrollTop = this.elements.chatMessages.scrollHeight;
+        }
     }
 
     // Create a live, growing assistant bubble for a streaming response.
@@ -443,12 +445,23 @@ class ChatWindowUI {
     // Split AI response into plain text and code snippets and append to chat
     renderAssistantResponse(response) {
         if (!response || typeof response !== 'string') return;
+        
+        // Remember scroll position before adding response
+        const prevLastChild = this.elements.chatMessages.lastElementChild;
+        
         const blocks = this.extractCodeBlocks(response);
         const textOnly = this.stripCodeBlocks(response, blocks);
+        let firstResponseMsg = null;
         if (textOnly && textOnly.trim().length) {
             this.addMessage(textOnly, 'assistant');
+            firstResponseMsg = prevLastChild ? prevLastChild.nextElementSibling : this.elements.chatMessages.firstElementChild;
         }
         blocks.forEach(b => this.addCodeSnippet(b.language, b.code));
+        
+        // Scroll to the start of the response
+        if (firstResponseMsg) {
+            firstResponseMsg.scrollIntoView({ block: 'start', behavior: 'smooth' });
+        }
     }
 
     extractCodeBlocks(text) {
@@ -485,7 +498,6 @@ class ChatWindowUI {
         messageDiv.appendChild(timeDiv);
         messageDiv.appendChild(textDiv);
         this.elements.chatMessages.appendChild(messageDiv);
-        this.elements.chatMessages.scrollTop = this.elements.chatMessages.scrollHeight;
     }
 
     escapeHtmlForSnippet(text) {

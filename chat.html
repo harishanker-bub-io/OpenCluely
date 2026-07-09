@@ -1068,7 +1068,11 @@
         messageDiv.appendChild(textDiv);
 
         chatMessages.appendChild(messageDiv);
-        chatMessages.scrollTop = chatMessages.scrollHeight;
+        
+        // Only auto-scroll for non-assistant messages (responses handle their own scroll)
+        if (type !== 'assistant') {
+          chatMessages.scrollTop = chatMessages.scrollHeight;
+        }
 
         if (!skipPersist) {
           chatHistory.push({ kind: 'message', type, text });
@@ -1310,7 +1314,6 @@
         messageDiv.appendChild(timeDiv);
         messageDiv.appendChild(textDiv);
         chatMessages.appendChild(messageDiv);
-        chatMessages.scrollTop = chatMessages.scrollHeight;
 
         try { if (window.Prism && Prism.highlightElement) { Prism.highlightElement(codeEl); } } catch (_) {}
 
@@ -1331,14 +1334,24 @@
           recentResponseHashes.delete(first);
         }
 
+        // Remember scroll position before adding response
+        const prevLastChild = chatMessages.lastElementChild;
+
         const blocks = extractCodeBlocks(response);
         const textOnly = stripCodeBlocks(response, blocks);
         // Add text response first (if any)
+        let firstResponseMsg = null;
         if (textOnly && textOnly.trim().length) {
           addMessage(textOnly, 'assistant');
+          firstResponseMsg = prevLastChild ? prevLastChild.nextElementSibling : chatMessages.firstElementChild;
         }
         // Add each code snippet separately
         blocks.forEach(b => addCodeSnippet(b.language, b.code));
+        
+        // Scroll to the start of the response
+        if (firstResponseMsg) {
+          firstResponseMsg.scrollIntoView({ block: 'start', behavior: 'smooth' });
+        }
       }
 
       // Basic IPC Event Listeners - simplified
