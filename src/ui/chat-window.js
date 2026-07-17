@@ -489,12 +489,41 @@ class ChatWindowUI {
         timeDiv.textContent = new Date().toLocaleTimeString();
         const textDiv = document.createElement('div');
         textDiv.className = 'message-text';
-        const escapedLang = (language || 'text').toUpperCase();
+        const lang = (language || 'text').toLowerCase();
         const escapedCode = this.escapeHtmlForSnippet(code || '');
         textDiv.innerHTML = `
-            <div style="font-size:12px;color:rgba(255,255,255,0.85);margin-bottom:6px;">Snippet: ${escapedLang}</div>
-            <pre><code>${escapedCode}</code></pre>
+            <div class="code-block">
+                <div class="code-header">
+                    <span>${lang.toUpperCase()}</span>
+                    <button class="copy-btn">Copy</button>
+                </div>
+                <div class="code-content">
+                    <pre><code class="language-${lang}">${escapedCode}</code></pre>
+                </div>
+            </div>
         `;
+        // Attach copy handler
+        const copyBtn = textDiv.querySelector('.copy-btn');
+        if (copyBtn) {
+            copyBtn.addEventListener('click', async (e) => {
+                e.stopPropagation();
+                try {
+                    let ok = false;
+                    if (window.electronAPI && typeof window.electronAPI.copyToClipboard === 'function') {
+                        ok = await window.electronAPI.copyToClipboard(code || '');
+                    }
+                    if (!ok && navigator.clipboard && navigator.clipboard.writeText) {
+                        await navigator.clipboard.writeText(code || '');
+                        ok = true;
+                    }
+                    if (ok) {
+                        copyBtn.classList.add('copied');
+                        copyBtn.textContent = 'Copied';
+                        setTimeout(() => { copyBtn.classList.remove('copied'); copyBtn.textContent = 'Copy'; }, 1200);
+                    }
+                } catch (err) { /* ignore */ }
+            });
+        }
         messageDiv.appendChild(timeDiv);
         messageDiv.appendChild(textDiv);
         this.elements.chatMessages.appendChild(messageDiv);

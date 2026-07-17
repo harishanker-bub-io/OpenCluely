@@ -10,6 +10,20 @@ contextBridge.exposeInMainWorld('electronAPI', {
   startSpeechRecognition: () => ipcRenderer.invoke('start-speech-recognition'),
   stopSpeechRecognition: () => ipcRenderer.invoke('stop-speech-recognition'),
   sendAudioChunk: (buffer) => ipcRenderer.send('audio-chunk', { buffer }),
+  notifyCaptureStatus: (status) => ipcRenderer.send('audio-capture-status', status),
+  // Pass plain strings — Error objects lose non-enumerable fields (message/name)
+  // when cloned across the contextBridge, which produced "error: unknown" logs.
+  reportCaptureError: (error) => {
+    const payload = (error && typeof error === 'object')
+      ? {
+          error: String(error.message || error.error || error || 'unknown'),
+          name: String(error.name || 'Error'),
+          constraint: error.constraint ? String(error.constraint) : undefined,
+          stack: error.stack ? String(error.stack) : undefined
+        }
+      : { error: String(error || 'unknown'), name: 'Error' };
+    ipcRenderer.send('audio-capture-error', payload);
+  },
   getSpeechAvailability: () => ipcRenderer.invoke('get-speech-availability'),
   
   // Window management
@@ -77,10 +91,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
     }
   },
   
-  // LLM window specific methods
-  expandLlmWindow: (contentMetrics) => ipcRenderer.invoke('expand-llm-window', contentMetrics),
-  resizeLlmWindowForContent: (contentMetrics) => ipcRenderer.invoke('resize-llm-window-for-content', contentMetrics),
-
   // Clipboard helper for reliable copy actions
   copyToClipboard: (text) => {
     try {
@@ -112,8 +122,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
   onTranscriptionLlmResponseStart: (callback) => ipcRenderer.on('transcription-llm-response-start', callback),
   onTranscriptionLlmResponseChunk: (callback) => ipcRenderer.on('transcription-llm-response-chunk', callback),
   onOpenGeminiConfig: (callback) => ipcRenderer.on('open-gemini-config', callback),
-  onDisplayLlmResponse: (callback) => ipcRenderer.on('display-llm-response', callback),
-  onShowLoading: (callback) => ipcRenderer.on('show-loading', callback),
   onSkillChanged: (callback) => ipcRenderer.on('skill-changed', callback),
   onInteractionModeChanged: (callback) => ipcRenderer.on('interaction-mode-changed', callback),
   onRecordingStarted: (callback) => ipcRenderer.on('recording-started', callback),

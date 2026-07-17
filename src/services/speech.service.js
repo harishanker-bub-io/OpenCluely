@@ -425,6 +425,8 @@ class SpeechService extends EventEmitter {
     this.audioProgram = null;
     this.whisperCommand = null;
     this.useRendererCapture = false;
+    this._audioChunkCount = 0;
+    this._droppedChunkLogged = false;
     this._resetVadState();
 
     this.initializeClient();
@@ -461,10 +463,10 @@ class SpeechService extends EventEmitter {
         throw new Error('Azure Speech SDK dependency is not installed');
       }
 
-      // On Windows, Azure uses its own native microphone input
-      // (AudioConfig.fromDefaultMicrophoneInput) — no local recorder needed.
-      // On macOS/Linux we need node-record-lpcm16 for push-stream capture.
-      if (process.platform !== 'win32' && (!recorder || typeof recorder.record !== 'function')) {
+      // On Windows and macOS, audio is captured in the renderer via the
+      // Web Audio API (getUserMedia), so node-record-lpcm16 is not needed.
+      // On Linux we still need sox/arecord via node-record-lpcm16.
+      if (process.platform === 'linux' && (!recorder || typeof recorder.record !== 'function')) {
         throw new Error('Local microphone recorder dependency is not installed');
       }
 
@@ -582,15 +584,21 @@ class SpeechService extends EventEmitter {
     this._cleanup();
 
     try {
-      // On Windows, use Azure Speech SDK's built-in microphone input
-      // (fromDefaultMicrophoneInput) which talks directly to WASAPI.
-      // This is the most reliable path — no sox, no renderer capture,
-      // no IPC overhead. The only prerequisite: the correct microphone
-      // must be set as the default recording device in Windows Sound settings.
-      // On macOS/Linux we keep the push-stream approach with sox/arecord.
-      if (process.platform === 'win32') {
-        this.audioConfig = sdk.AudioConfig.fromDefaultMicrophoneInput();
-        logger.info('Azure recording configured with native Windows microphone');
+      // AudioConfig.fromDefaultMicrophoneInput() is a browser-only API that
+      // calls navigator.mediaDevices.getUserMedia(). In the Electron main
+      // process (Node.js) this API does not exist — the global polyfill
+      // returns an empty MediaStream, so no audio ever reaches Azure.
+      //
+      // On Windows and macOS we use the renderer's Web Audio API capture
+      // (getUserMedia in the Chromium renderer) piped through a push stream.
+      // Linux keeps the native sox/arecord recorder path via node-record-lpcm16.
+      if (process.platform === 'win32' || process.platform === 'darwin') {
+        this.useRendererCapture = true;
+        this.pushStream = sdk.AudioInputStream.createPushStream();
+        this.audioConfig = sdk.AudioConfig.fromStreamInput(this.pushStream);
+        logger.info('Azure recording configured with push-stream (renderer audio capture)', {
+          platform: process.platform
+        });
       } else {
         this.pushStream = sdk.AudioInputStream.createPushStream();
         this.audioConfig = sdk.AudioConfig.fromStreamInput(this.pushStream);
@@ -628,39 +636,18 @@ class SpeechService extends EventEmitter {
       }
     };
 
-    // Diagnostic: track whether the Azure service is actually hearing audio
-    this._azureHeardSpeech = false;
-    this._azureNoMatchCount = 0;
-    this._azureSilenceTimer = null;
+    // Track whether Azure recognition has actually been started. We defer
+    // starting recognition until the first audio chunk arrives from the
+    // renderer. This eliminates the race where Azure's silence detector fires
+    // before Windows renderer capture is ready.
+    this._azureRecognitionStarted = false;
 
     this.recognizer.speechStartDetected = (s, e) => {
-      this._azureHeardSpeech = true;
-      if (this._azureSilenceTimer) {
-        clearTimeout(this._azureSilenceTimer);
-        this._azureSilenceTimer = null;
-      }
       logger.info('Azure speech start detected (microphone is capturing audio)');
     };
     this.recognizer.speechEndDetected = (s, e) => {
       logger.info('Azure speech end detected');
     };
-
-    // Warn the user if no audio is captured within 5 seconds. On Windows
-    // this usually means the default recording device is a virtual mic
-    // (e.g. Steam Streaming Microphone) instead of the physical one.
-    // However, if using renderer capture, allow more time for getUserMedia
-    // permission dialog and audio stream setup.
-    const silenceTimeoutMs = this.useRendererCapture ? 15000 : 5000;
-    this._azureSilenceTimer = setTimeout(() => {
-      if (!this._azureHeardSpeech && this.isRecording) {
-        logger.warn('No audio detected from microphone after ' + silenceTimeoutMs + 'ms', {
-          useRendererCapture: this.useRendererCapture,
-          pushStreamOk: !!this.pushStream
-        });
-        this.emit('status', 'No audio detected — check microphone permissions and try again');
-        this.emit('error', 'No microphone audio detected. Check that your microphone is enabled and not muted.');
-      }
-    }, silenceTimeoutMs);
 
     this.recognizer.canceled = (s, e) => {
       logger.warn('Recognition session canceled', {
@@ -698,6 +685,49 @@ class SpeechService extends EventEmitter {
       this.stopRecording();
     };
 
+    // Emit recording-started so the renderer begins microphone capture.
+    // Azure recognition itself is deferred until the first audio chunk arrives,
+    // so we never start Azure into a silent microphone.
+    this.emit('recording-started');
+    this.emit('status', 'Waiting for microphone audio…');
+
+    // If no audio arrives within a reasonable window, the renderer capture or
+    // mic permission is broken. Stop with a clear error.
+    const audioWaitMs = this.useRendererCapture ? 30000 : 10000;
+    this._azureAudioWaitTimer = setTimeout(() => {
+      if (!this._azureRecognitionStarted && this.isRecording) {
+        logger.error('No renderer audio received within timeout', {
+          audioWaitMs,
+          useRendererCapture: this.useRendererCapture
+        });
+        this.emit('error', 'Microphone audio did not arrive. Check that your microphone is enabled and permission is granted.');
+        this.stopRecording();
+      }
+    }, audioWaitMs);
+
+    if (!this.useRendererCapture) {
+      // Linux native capture starts immediately in the main process, so start
+      // Azure right away; the first chunk will still trigger the normal path.
+      this._startAzureRecognition();
+    }
+  }
+
+  _startAzureRecognition(firstChunk) {
+    if (this._azureRecognitionStarted || !this.recognizer) {
+      return;
+    }
+    this._azureRecognitionStarted = true;
+
+    if (this._azureAudioWaitTimer) {
+      clearTimeout(this._azureAudioWaitTimer);
+      this._azureAudioWaitTimer = null;
+    }
+
+    logger.info('First audio chunk received, starting Azure recognition', {
+      bytes: firstChunk ? firstChunk.length : 0,
+      waitMs: this.sessionStartTime ? Date.now() - this.sessionStartTime : 0
+    });
+
     const startTimeout = setTimeout(() => {
       logger.error('Recognition start timeout');
       this.emit('error', 'Speech recognition start timeout. Please try again.');
@@ -708,15 +738,7 @@ class SpeechService extends EventEmitter {
       () => {
         clearTimeout(startTimeout);
         logger.info('Continuous Azure speech recognition started successfully');
-        this.emit('recording-started');
         this.emit('status', 'Azure recording started');
-        // For renderer capture (Windows), ensure UI knows to start capturing
-        if (this.useRendererCapture) {
-          logger.debug('Requesting UI to start audio capture for Azure', { platform: process.platform });
-          if (global.windowManager) {
-            global.windowManager.handleRecordingStarted();
-          }
-        }
       },
       (error) => {
         clearTimeout(startTimeout);
@@ -737,8 +759,6 @@ class SpeechService extends EventEmitter {
     this.pendingFlush = false;
     this.pendingFinal = false;
     this._resetVadState();
-    this.emit('recording-started');
-    this.emit('status', 'Local Whisper recording started');
 
     // Capture microphone audio in the renderer via the Web Audio API on Windows
     // and macOS. Windows lacks the Unix sox/rec/arecord tools node-record-lpcm16
@@ -746,23 +766,21 @@ class SpeechService extends EventEmitter {
     // and a child-process mic that the system TCC prompt can't attribute. The
     // renderer path uses getUserMedia, which macOS prompts for cleanly via the
     // app's NSMicrophoneUsageDescription. Linux keeps the native recorder path.
+    //
+    // Set useRendererCapture BEFORE emitting recording-started so early audio
+    // chunks from the renderer are not dropped.
     this.useRendererCapture = process.platform === 'win32' || process.platform === 'darwin';
+    this.emit('recording-started');
+    this.emit('status', 'Local Whisper recording started');
+
     if (this.useRendererCapture) {
       this.emit('status', 'Waiting for microphone audio…');
-      // The renderer starts sending chunks once it receives the recording-started event.
       this._startSegmentWatchdog();
-      if (global.windowManager) {
-        global.windowManager.handleRecordingStarted();
-      }
       return;
     }
 
     this._startMicrophoneCapture();
     this._startSegmentWatchdog();
-
-    if (global.windowManager) {
-      global.windowManager.handleRecordingStarted();
-    }
   }
 
   /**
@@ -825,6 +843,16 @@ class SpeechService extends EventEmitter {
    */
   handleAudioChunkFromRenderer(chunk) {
     if (!this.isRecording || !this.useRendererCapture) {
+      // Log once per session why we're dropping the chunk
+      if (!this._droppedChunkLogged) {
+        this._droppedChunkLogged = true;
+        logger.info('Audio chunk dropped', {
+          isRecording: this.isRecording,
+          useRendererCapture: this.useRendererCapture,
+          provider: this.provider,
+          hasPushStream: !!this.pushStream
+        });
+      }
       return;
     }
     if (!chunk || !chunk.length) {
@@ -834,10 +862,18 @@ class SpeechService extends EventEmitter {
     if (this.provider === 'azure') {
       if (!this._audioChunkCount) this._audioChunkCount = 0;
       this._audioChunkCount++;
-      if (this._audioChunkCount % 10 === 0) {
-        logger.debug('Azure: received audio chunks from renderer', { 
+      // Log first few chunks at info level for diagnostics
+      if (this._audioChunkCount <= 3) {
+        logger.info('Azure push-stream: received audio from renderer', {
+          chunkNumber: this._audioChunkCount,
+          bytes: buffer.length,
+          pushStreamOk: !!this.pushStream,
+          isRecording: this.isRecording
+        });
+      } else if (this._audioChunkCount % 50 === 0) {
+        logger.debug('Azure: received audio chunks from renderer', {
           count: this._audioChunkCount,
-          lastChunkBytes: buffer.length 
+          lastChunkBytes: buffer.length
         });
       }
       this._handleAudioChunk(buffer);
@@ -990,8 +1026,7 @@ class SpeechService extends EventEmitter {
     logger.info('Stopping speech recognition session', {
       provider: this.provider,
       sessionDuration: `${sessionDuration}ms`,
-      heardSpeech: this._azureHeardSpeech,
-      noMatchCount: this._azureNoMatchCount
+      azureRecognitionStarted: this._azureRecognitionStarted
     });
 
     if (this.provider === 'azure' && this.recognizer) {
@@ -1047,11 +1082,9 @@ class SpeechService extends EventEmitter {
 
   _finalizeStop(statusMessage) {
     this._cleanup();
+    // Emit only — main.js routes recording-stopped to windowManager.
     this.emit('recording-stopped');
     this.emit('status', statusMessage);
-    if (global.windowManager) {
-      global.windowManager.handleRecordingStopped();
-    }
   }
 
   _cleanup() {
@@ -1060,10 +1093,12 @@ class SpeechService extends EventEmitter {
       this.segmentTimer = null;
     }
 
-    if (this._azureSilenceTimer) {
-      clearTimeout(this._azureSilenceTimer);
-      this._azureSilenceTimer = null;
+    if (this._azureAudioWaitTimer) {
+      clearTimeout(this._azureAudioWaitTimer);
+      this._azureAudioWaitTimer = null;
     }
+
+    this._azureRecognitionStarted = false;
 
     if (this.recognizer) {
       try {
@@ -1112,6 +1147,8 @@ class SpeechService extends EventEmitter {
     this.transcriptionInFlight = false;
     this.pendingFlush = false;
     this.pendingFinal = false;
+    this._audioChunkCount = 0;
+    this._droppedChunkLogged = false;
     this._resetVadState();
     this._audioDataLogged = false;
     this.useRendererCapture = false;
@@ -1758,6 +1795,11 @@ class SpeechService extends EventEmitter {
     }
 
     if (this.provider === 'azure' && this.pushStream) {
+      // Defer Azure recognition until audio is actually flowing. The SDK buffers
+      // chunks written before recognition starts, so nothing is lost.
+      if (!this._azureRecognitionStarted && this.recognizer) {
+        this._startAzureRecognition(chunk);
+      }
       try {
         this.pushStream.write(chunk);
       } catch (error) {

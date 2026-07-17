@@ -255,16 +255,16 @@
       
       /* Ensure code blocks are fully visible */
       .message.assistant pre {
-        background: rgba(0, 0, 0, 0.4);
-        padding: 8px 12px;
-        border-radius: 6px;
+        background: rgba(0, 0, 0, 0.2);
+        padding: 10px 14px;
+        border-radius: 0 0 6px 6px;
         font-family: 'Monaco', 'Menlo', monospace;
         font-size: 11px;
-        color: #64ffda;
+        color: #e5e7eb;
         overflow-x: auto;
-        white-space: pre-wrap;
-        word-wrap: break-word;
-        margin: 8px 0;
+        white-space: pre;
+        word-wrap: normal;
+        margin: 0;
         position: relative;
       }
       
@@ -273,30 +273,57 @@
         padding: 0;
         border-radius: 0;
         display: block;
+        color: #e5e7eb;
+      }
+
+      /* Code block wrapper (like center panel) */
+      .message.assistant .code-block {
+        background: rgba(0, 0, 0, 0.3);
+        margin: 10px 0;
+        border-radius: 8px;
+        border: 1px solid rgba(255, 255, 255, 0.12);
+        overflow: hidden;
+      }
+      
+      .message.assistant .code-header {
+        background: rgba(0, 0, 0, 0.45);
+        padding: 7px 14px;
+        font-family: 'Monaco', 'Menlo', monospace;
+        font-size: 11px;
+        font-weight: 700;
+        color: #9ca3af;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        letter-spacing: 0.3px;
+      }
+      
+      .message.assistant .code-content {
+        overflow-x: auto;
+        background: rgba(0, 0, 0, 0.2);
       }
 
       /* Copy button in code blocks */
       .copy-btn {
-        position: absolute;
-        top: 8px;
-        right: 8px;
-        background: rgba(0, 0, 0, 0.5);
-        color: rgba(255, 255, 255, 0.9);
-        border: 1px solid rgba(255, 255, 255, 0.2);
-        padding: 4px 8px;
-        font-size: 11px;
+        background: rgba(255, 255, 255, 0.08);
+        color: rgba(255, 255, 255, 0.8);
+        border: 1px solid rgba(255, 255, 255, 0.15);
+        padding: 3px 10px;
+        font-size: 10px;
         border-radius: 4px;
         cursor: pointer;
         -webkit-app-region: no-drag;
-        transition: background 0.2s ease, border-color 0.2s ease, transform 0.12s ease;
+        transition: background 0.2s ease, border-color 0.2s ease;
+        font-weight: 500;
       }
       .copy-btn:hover {
-        background: rgba(0,0,0,0.7);
+        background: rgba(255, 255, 255, 0.15);
+        color: rgba(255, 255, 255, 1);
       }
       .copy-btn.copied {
-        background: rgba(76, 175, 80, 0.8);
-        border-color: rgba(76, 175, 80, 0.9);
-        transform: scale(0.98);
+        background: rgba(76, 175, 80, 0.7);
+        border-color: rgba(76, 175, 80, 0.8);
+        color: #fff;
       }
       
       /* Ensure lists are fully visible */
@@ -1296,30 +1323,41 @@
         textDiv.className = 'message-text';
 
         const lang = (language || 'text').toLowerCase();
-        const pre = document.createElement('pre');
-        const codeEl = document.createElement('code');
-        codeEl.className = `language-${lang}`;
-        codeEl.innerHTML = escapeHtml(code || '');
+
+        // Code block wrapper (matches center panel design)
+        const codeBlock = document.createElement('div');
+        codeBlock.className = 'code-block';
+
+        // Header with language label + copy button
+        const header = document.createElement('div');
+        header.className = 'code-header';
+        const langLabel = document.createElement('span');
+        langLabel.textContent = lang.toUpperCase();
+        header.appendChild(langLabel);
 
         const copyBtn = document.createElement('button');
         copyBtn.className = 'copy-btn';
         copyBtn.textContent = 'Copy';
         attachCopy(copyBtn, code || '');
+        header.appendChild(copyBtn);
 
-        pre.appendChild(copyBtn);
+        // Code content area
+        const codeContent = document.createElement('div');
+        codeContent.className = 'code-content';
+        const pre = document.createElement('pre');
+        const codeEl = document.createElement('code');
+        codeEl.className = `language-${lang}`;
+        codeEl.innerHTML = escapeHtml(code || '');
         pre.appendChild(codeEl);
-        
-        const label = document.createElement('div');
-        label.style.cssText = 'font-size:12px;color:rgba(255,255,255,0.8);margin-bottom:6px;';
-        label.textContent = `Snippet: ${lang.toUpperCase()}`;
+        codeContent.appendChild(pre);
 
-        textDiv.appendChild(label);
-        textDiv.appendChild(pre);
+        codeBlock.appendChild(header);
+        codeBlock.appendChild(codeContent);
+        textDiv.appendChild(codeBlock);
 
         messageDiv.appendChild(timeDiv);
         messageDiv.appendChild(textDiv);
         chatMessages.appendChild(messageDiv);
-        chatMessages.scrollTop = chatMessages.scrollHeight;
 
         try { if (window.Prism && Prism.highlightElement) { Prism.highlightElement(codeEl); } } catch (_) {}
 

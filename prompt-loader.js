@@ -120,8 +120,10 @@ STRICT REQUIREMENTS:
 - Avoid unnecessary verbosity; focus on correctness, clarity, and efficiency.`;
         break;
       default:
-        languageInjection = `\n\n## PROGRAMMING LANGUAGE: ${languageUpper}
-All code and examples must be in ${languageTitle}. Use code fences with tag: \`\`\`${fenceTag}\`\`\`.`;
+        languageInjection = `\n\n## PREFERRED LANGUAGE: ${languageUpper}
+- Default to ${languageTitle} for coding examples and implementation questions.
+- HOWEVER, if the question is specifically about another language, framework, or ecosystem, answer in THAT context — do not force ${languageTitle} where it doesn't belong.
+- For language-agnostic concept questions, use ${languageTitle} for any code snippets but explain the concept independently of the language.`;
     }
 
     return promptContent + languageInjection;

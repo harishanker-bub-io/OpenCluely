@@ -305,6 +305,9 @@ class MainWindowUI {
 
         // Add click handler for microphone
         this.micButton.addEventListener('click', async () => {
+            // Ensure the AudioContext is unlocked while we have a user gesture.
+            await this._warmupAudioContext();
+
             if (this.isInteractive && this.speechAvailable) {
                 try {
                     if (this.isRecording) {
@@ -419,10 +422,12 @@ class MainWindowUI {
             });
 
             window.electronAPI.onRecordingStarted(() => {
+                logger.info('recording-started event received in renderer', { component: 'MainWindowUI' });
                 this.handleRecordingStarted();
             });
 
             window.electronAPI.onRecordingStopped(() => {
+                logger.info('recording-stopped event received in renderer', { component: 'MainWindowUI' });
                 this.handleRecordingStopped();
             });
 
@@ -464,6 +469,9 @@ class MainWindowUI {
                     component: 'MainWindowUI'
                 });
                 this.loadSpeechAvailability();
+                // Also try to unlock the AudioContext so the next global-shortcut
+                // recording can start without waiting for a renderer gesture.
+                this._warmupAudioContext();
             });
             
             // Global keyboard shortcuts
@@ -514,6 +522,19 @@ class MainWindowUI {
         
         // Settings shortcut
         this.setupSettingsShortcut();
+
+        // One-shot listener to unlock the AudioContext on the first user
+        // interaction. After this, global-shortcut-triggered capture can start
+        // immediately without waiting for a renderer gesture.
+        const unlockAudio = () => {
+            this._warmupAudioContext();
+            document.removeEventListener('click', unlockAudio);
+            document.removeEventListener('keydown', unlockAudio);
+            document.removeEventListener('touchstart', unlockAudio);
+        };
+        document.addEventListener('click', unlockAudio);
+        document.addEventListener('keydown', unlockAudio);
+        document.addEventListener('touchstart', unlockAudio);
     }
 
     handleLLMResponse(data) {
@@ -649,7 +670,7 @@ class MainWindowUI {
         // On Windows and macOS, capture microphone audio in the renderer using Web Audio API
         // (getUserMedia). This works for both Azure and Whisper, avoiding:
         // - Windows: sox/rec/arecord unavailable (node-record-lpcm16 fails)
-        // - Windows: Azure native WASAPI blocked by Privacy settings on non-installed apps
+        // - Windows: Azure fromDefaultMicrophoneInput is browser-only / empty in Node
         // - macOS: Avoiding unbundled Homebrew sox dependency + TCC permission issues
         // Linux uses the native recorder directly (renderer capture not needed).
         const platform = (typeof navigator !== 'undefined' &&
@@ -662,8 +683,19 @@ class MainWindowUI {
         logger.debug('Recording started', { component: 'MainWindowUI' });
     }
 
+    _notifyCaptureStatus(stage, detail) {
+        try {
+            if (window.electronAPI && window.electronAPI.notifyCaptureStatus) {
+                window.electronAPI.notifyCaptureStatus({ stage, detail });
+            }
+        } catch (_) { /* ignore */ }
+    }
+
     handleRecordingStopped() {
         this.isRecording = false;
+        // Invalidate any in-flight getUserMedia start so a late resolve can't
+        // re-open the mic after stop, or race a second start.
+        this._captureGeneration = (this._captureGeneration || 0) + 1;
         if (this.micButton) {
             this.micButton.classList.remove('recording');
         }
@@ -672,97 +704,301 @@ class MainWindowUI {
     }
 
     /**
-     * Capture microphone audio in the renderer using the Web Audio API.
-     * This is used for Whisper on Windows where node-record-lpcm16's sox/rec
-     * dependencies are unavailable.
+     * Capture microphone audio in the renderer using the Web Audio API and
+     * stream 16 kHz mono PCM16 to the main process for Azure/Whisper.
      */
     async _startRendererAudioCapture() {
+        const generation = (this._captureGeneration = (this._captureGeneration || 0) + 1);
+        const startTime = performance.now();
+        this._notifyCaptureStatus('started', { generation });
+
         try {
-            this._stopRendererAudioCapture();
+            // Tear down any previous capture graph, but keep the AudioContext
+            // alive. Creating a brand-new AudioContext here would start it
+            // suspended because the global shortcut is not a renderer user
+            // gesture; the warmed-up context is reused instead.
+            this._stopRendererAudioCapture(false);
+
+            if (!navigator.mediaDevices || typeof navigator.mediaDevices.getUserMedia !== 'function') {
+                this._notifyCaptureStatus('error', { reason: 'getUserMedia unavailable' });
+                throw new Error('navigator.mediaDevices.getUserMedia is not available in this renderer');
+            }
 
             logger.info('Requesting microphone access via getUserMedia', { component: 'MainWindowUI' });
-            const stream = await navigator.mediaDevices.getUserMedia({
-                audio: {
-                    echoCancellation: true,
-                    noiseSuppression: true,
-                    autoGainControl: true,
-                    sampleRate: { ideal: 16000 }
-                }
-            });
-            logger.info('Microphone stream obtained successfully', { 
+            this._notifyCaptureStatus('requesting-mic', {});
+
+            // Use gentle constraints first; if the device rejects them (common on
+            // Windows virtual mics), fall back to unconstrained audio:true.
+            let stream;
+            try {
+                stream = await navigator.mediaDevices.getUserMedia({
+                    audio: {
+                        echoCancellation: true,
+                        noiseSuppression: true,
+                        autoGainControl: true,
+                        channelCount: 1
+                    }
+                });
+            } catch (primaryError) {
+                logger.warn('getUserMedia with constraints failed, retrying with audio:true', {
+                    component: 'MainWindowUI',
+                    error: primaryError && primaryError.message,
+                    name: primaryError && primaryError.name
+                });
+                stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            }
+
+            // Stop was requested while we awaited permission.
+            if (generation !== this._captureGeneration || !this.isRecording) {
+                stream.getTracks().forEach((track) => track.stop());
+                return;
+            }
+
+            const audioTrack = stream.getAudioTracks()[0];
+            logger.info('Microphone stream obtained successfully', {
                 component: 'MainWindowUI',
-                tracks: stream.getTracks().length
+                elapsedMs: Math.round(performance.now() - startTime),
+                tracks: stream.getAudioTracks().map((t) => ({
+                    label: t.label,
+                    readyState: t.readyState,
+                    enabled: t.enabled,
+                    muted: t.muted
+                }))
             });
             this._mediaStream = stream;
-
-            const audioContext = new (window.AudioContext || window.webkitAudioContext)({
-                sampleRate: 16000
+            this._notifyCaptureStatus('mic-granted', {
+                track: audioTrack ? audioTrack.label : 'none',
+                muted: audioTrack ? audioTrack.muted : null
             });
-            this._audioContext = audioContext;
-            logger.info('AudioContext created', { 
+
+            // Reuse the warmed-up AudioContext whenever possible. If it was
+            // closed by an explicit cleanup, create a new one and attempt to
+            // resume it (the autoplay-policy switch makes this succeed even
+            // without a renderer gesture).
+            const AudioCtx = window.AudioContext || window.webkitAudioContext;
+            let audioContext = this._audioContext;
+            let reused = false;
+            if (!audioContext || audioContext.state === 'closed') {
+                audioContext = new AudioCtx();
+                this._audioContext = audioContext;
+                logger.info('Created new AudioContext', {
+                    component: 'MainWindowUI',
+                    state: audioContext.state
+                });
+            } else {
+                reused = true;
+                logger.info('Reusing existing AudioContext', {
+                    component: 'MainWindowUI',
+                    state: audioContext.state
+                });
+            }
+
+            if (audioContext.state === 'suspended') {
+                try {
+                    await audioContext.resume();
+                    logger.info('AudioContext resumed', {
+                        component: 'MainWindowUI',
+                        state: audioContext.state
+                    });
+                } catch (resumeError) {
+                    logger.warn('AudioContext.resume() failed', {
+                        component: 'MainWindowUI',
+                        error: resumeError && resumeError.message,
+                        state: audioContext.state
+                    });
+                }
+            }
+
+            if (generation !== this._captureGeneration || !this.isRecording) {
+                this._stopRendererAudioCapture(false);
+                return;
+            }
+
+            if (audioContext.state !== 'running') {
+                this._notifyCaptureStatus('error', { reason: 'audio-context-not-running', state: audioContext.state });
+                throw new Error(
+                    `AudioContext is ${audioContext.state}; ScriptProcessor cannot capture audio. ` +
+                    'Try clicking the overlay once before using the global shortcut.'
+                );
+            }
+
+            this._notifyCaptureStatus('audio-context-running', { state: audioContext.state });
+            const inputSampleRate = audioContext.sampleRate || 48000;
+            logger.info('AudioContext ready', {
                 component: 'MainWindowUI',
-                sampleRate: audioContext.sampleRate,
-                state: audioContext.state
+                elapsedMs: Math.round(performance.now() - startTime),
+                reused,
+                state: audioContext.state,
+                sampleRate: inputSampleRate
             });
 
             const source = audioContext.createMediaStreamSource(stream);
             const bufferSize = 4096;
+            // ScriptProcessor is deprecated but widely available in Electron's
+            // Chromium and does not require a separate worklet file URL.
             const scriptNode = audioContext.createScriptProcessor(bufferSize, 1, 1);
             this._scriptNode = scriptNode;
 
+            // Keep the graph alive without playing mic audio through speakers.
+            const muteGain = audioContext.createGain();
+            muteGain.gain.value = 0;
+            this._muteGain = muteGain;
+
             let audioChunkCount = 0;
+            let zeroChunkCount = 0;
             scriptNode.onaudioprocess = (event) => {
-                if (!this.isRecording || !window.electronAPI || !window.electronAPI.sendAudioChunk) {
+                if (
+                    generation !== this._captureGeneration ||
+                    !this.isRecording ||
+                    !window.electronAPI ||
+                    !window.electronAPI.sendAudioChunk
+                ) {
                     return;
                 }
                 const inputData = event.inputBuffer.getChannelData(0);
-                const pcm16 = new Int16Array(inputData.length);
+                // Detect silent/muted streams early so we can warn instead of
+                // timing out with no audio.
+                let maxSample = 0;
                 for (let i = 0; i < inputData.length; i++) {
-                    const s = Math.max(-1, Math.min(1, inputData[i]));
-                    pcm16[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+                    const v = Math.abs(inputData[i]);
+                    if (v > maxSample) maxSample = v;
+                }
+                if (audioChunkCount === 0) {
+                    this._notifyCaptureStatus('first-audioprocess', { maxSample, length: inputData.length });
+                }
+                if (maxSample === 0) {
+                    zeroChunkCount++;
+                    if (zeroChunkCount <= 3 || zeroChunkCount % 100 === 0) {
+                        logger.warn('Received all-zero audio chunk', {
+                            component: 'MainWindowUI',
+                            zeroChunkCount,
+                            trackMuted: audioTrack && audioTrack.muted,
+                            trackReadyState: audioTrack && audioTrack.readyState
+                        });
+                    }
+                    return;
+                }
+                zeroChunkCount = 0;
+
+                const pcm16 = this._floatTo16kPcm16(inputData, inputSampleRate);
+                if (!pcm16 || pcm16.length === 0) {
+                    return;
                 }
                 audioChunkCount++;
-                if (audioChunkCount % 10 === 0) {
+                if (audioChunkCount <= 3 || audioChunkCount % 50 === 0) {
                     logger.debug('Audio chunk sent to main process', {
                         component: 'MainWindowUI',
                         chunk: audioChunkCount,
-                        bytes: pcm16.buffer.byteLength
+                        bytes: pcm16.byteLength,
+                        inputSampleRate,
+                        elapsedMs: Math.round(performance.now() - startTime)
                     });
                 }
-                window.electronAPI.sendAudioChunk(pcm16.buffer);
+                // Copy into a tight ArrayBuffer so IPC does not send a shared
+                // larger backing store from the AudioBuffer.
+                const copy = pcm16.buffer.slice(
+                    pcm16.byteOffset,
+                    pcm16.byteOffset + pcm16.byteLength
+                );
+                window.electronAPI.sendAudioChunk(copy);
             };
 
             source.connect(scriptNode);
-            scriptNode.connect(audioContext.destination);
+            scriptNode.connect(muteGain);
+            muteGain.connect(audioContext.destination);
 
-            logger.info('Renderer audio capture started successfully', { component: 'MainWindowUI' });
+            this._notifyCaptureStatus('graph-connected', { inputSampleRate });
+            logger.info('Renderer audio capture started successfully', {
+                component: 'MainWindowUI',
+                elapsedMs: Math.round(performance.now() - startTime),
+                inputSampleRate,
+                targetSampleRate: 16000
+            });
         } catch (error) {
+            if (generation !== this._captureGeneration) {
+                return;
+            }
+            const errInfo = {
+                message: (error && error.message) || String(error || 'unknown'),
+                name: (error && error.name) || 'Error',
+                constraint: error && error.constraint,
+                stack: error && error.stack
+            };
+            this._notifyCaptureStatus('error', { ...errInfo });
             logger.error('Failed to start renderer audio capture', {
                 component: 'MainWindowUI',
-                error: error.message,
-                name: error.name
+                error: errInfo.message,
+                name: errInfo.name,
+                constraint: errInfo.constraint
             });
-            // Notify main process so it can stop the recording state
             try {
-                await window.electronAPI.stopSpeechRecognition();
+                if (window.electronAPI && window.electronAPI.reportCaptureError) {
+                    window.electronAPI.reportCaptureError(errInfo);
+                }
+            } catch (_) { /* ignore */ }
+            try {
+                if (window.electronAPI && window.electronAPI.stopSpeechRecognition) {
+                    await window.electronAPI.stopSpeechRecognition();
+                }
             } catch (_) { /* ignore */ }
         }
     }
 
-    _stopRendererAudioCapture() {
+    /**
+     * Convert Float32 samples at inputSampleRate to little-endian PCM16 at 16 kHz.
+     */
+    _floatTo16kPcm16(float32Array, inputSampleRate) {
+        const targetRate = 16000;
+        if (!float32Array || float32Array.length === 0) {
+            return new Int16Array(0);
+        }
+
+        let samples = float32Array;
+        if (inputSampleRate && Math.abs(inputSampleRate - targetRate) > 1) {
+            const ratio = inputSampleRate / targetRate;
+            const newLength = Math.max(1, Math.floor(float32Array.length / ratio));
+            const downsampled = new Float32Array(newLength);
+            for (let i = 0; i < newLength; i++) {
+                const start = Math.floor(i * ratio);
+                const end = Math.min(float32Array.length, Math.floor((i + 1) * ratio));
+                let sum = 0;
+                let count = 0;
+                for (let j = start; j < end; j++) {
+                    sum += float32Array[j];
+                    count++;
+                }
+                downsampled[i] = count > 0 ? sum / count : float32Array[Math.min(start, float32Array.length - 1)];
+            }
+            samples = downsampled;
+        }
+
+        const pcm16 = new Int16Array(samples.length);
+        for (let i = 0; i < samples.length; i++) {
+            const s = Math.max(-1, Math.min(1, samples[i]));
+            pcm16[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+        }
+        return pcm16;
+    }
+
+    _stopRendererAudioCapture(closeContext = false) {
         try {
             if (this._scriptNode) {
-                this._scriptNode.disconnect();
+                try { this._scriptNode.disconnect(); } catch (_) { /* ignore */ }
                 this._scriptNode.onaudioprocess = null;
                 this._scriptNode = null;
+            }
+            if (this._muteGain) {
+                try { this._muteGain.disconnect(); } catch (_) { /* ignore */ }
+                this._muteGain = null;
             }
             if (this._mediaStream) {
                 this._mediaStream.getTracks().forEach((track) => track.stop());
                 this._mediaStream = null;
             }
-            if (this._audioContext) {
-                this._audioContext.close().catch(() => {});
+            if (closeContext && this._audioContext) {
+                const ctx = this._audioContext;
                 this._audioContext = null;
+                ctx.close().catch(() => {});
             }
             if (this._captureInterval) {
                 clearInterval(this._captureInterval);
@@ -772,6 +1008,45 @@ class MainWindowUI {
             logger.error('Error stopping renderer audio capture', {
                 component: 'MainWindowUI',
                 error: error.message
+            });
+        }
+    }
+
+    /**
+     * Explicitly close the AudioContext. Call this only when the overlay is
+     * being torn down; normal recording stop keeps the context alive so it can
+     * be reused for the next global-shortcut capture.
+     */
+    _closeAudioContext() {
+        this._stopRendererAudioCapture(true);
+    }
+
+    /**
+     * Warm up the AudioContext on a user gesture. Chromium's autoplay policy
+     * suspends AudioContexts until the document receives a user activation;
+     * calling resume() during a click/keydown unlocks audio for the rest of the
+     * session, so the global shortcut can start capture instantly afterwards.
+     */
+    async _warmupAudioContext() {
+        try {
+            const AudioCtx = window.AudioContext || window.webkitAudioContext;
+            if (!AudioCtx) {
+                return;
+            }
+            if (!this._audioContext || this._audioContext.state === 'closed') {
+                this._audioContext = new AudioCtx();
+            }
+            if (this._audioContext.state === 'suspended') {
+                await this._audioContext.resume();
+            }
+            logger.debug('AudioContext warmed up', {
+                component: 'MainWindowUI',
+                state: this._audioContext.state
+            });
+        } catch (error) {
+            logger.warn('AudioContext warmup failed', {
+                component: 'MainWindowUI',
+                error: error && error.message
             });
         }
     }

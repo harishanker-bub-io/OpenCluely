@@ -67,6 +67,10 @@ app.commandLine.appendSwitch("disable-background-networking");
 app.commandLine.appendSwitch("disable-component-update");
 app.commandLine.appendSwitch("disable-domain-reliability");
 app.commandLine.appendSwitch("no-pings");
+// Allow the renderer's AudioContext to start without a user gesture. Speech
+// is triggered by global shortcuts, so the renderer never sees the gesture
+// that Chromium's autoplay policy requires for Web Audio capture.
+app.commandLine.appendSwitch("autoplay-policy", "no-user-gesture-required");
 
 // Set a stable Windows AppUserModelId so the app appears under its own
 // name in Windows microphone privacy settings. Must be called before any
@@ -150,7 +154,6 @@ class ApplicationController {
     this.windowConfigs = {
       main: { title: "OpenCluely" },
       chat: { title: "Chat" },
-      llmResponse: { title: "AI Response" },
       settings: { title: "Settings" },
     };
 
@@ -337,15 +340,65 @@ class ApplicationController {
   }
 
   setupPermissions() {
-    session.defaultSession.setPermissionRequestHandler(
-      (webContents, permission, callback) => {
-        const allowedPermissions = ["microphone", "camera", "display-capture"];
-        const granted = allowedPermissions.includes(permission);
+    // Chromium/Electron requests "media" for getUserMedia (mic/camera).
+    // Older handlers that only allow "microphone"/"camera" silently deny
+    // capture — which surfaces as "Renderer audio capture failed" with an
+    // empty/unknown error message after structured-clone drops DOMException
+    // fields across the contextBridge.
+    const allowedPermissions = new Set([
+      "media",
+      "microphone",
+      "camera",
+      "display-capture",
+      "mediaKeySystem",
+    ]);
 
-        logger.debug("Permission request", { permission, granted });
+    session.defaultSession.setPermissionRequestHandler(
+      (webContents, permission, callback, details) => {
+        const granted = allowedPermissions.has(permission);
+        logger.info("Permission request", {
+          permission,
+          granted,
+          requestingUrl: details && details.requestingUrl,
+        });
         callback(granted);
       }
     );
+
+    // Without a check handler, some Chromium code paths treat media as
+    // denied even when the request handler would grant it.
+    session.defaultSession.setPermissionCheckHandler(
+      (_webContents, permission, _requestingOrigin, details) => {
+        if (allowedPermissions.has(permission)) {
+          return true;
+        }
+        // mediaTypes is present for "media" checks (e.g. audio / video).
+        if (
+          permission === "media" ||
+          (details &&
+            Array.isArray(details.mediaTypes) &&
+            details.mediaTypes.some((t) => t === "audio" || t === "video"))
+        ) {
+          return true;
+        }
+        return false;
+      }
+    );
+
+    if (typeof session.defaultSession.setDevicePermissionHandler === "function") {
+      session.defaultSession.setDevicePermissionHandler((details) => {
+        const allowed =
+          details.deviceType === "microphone" ||
+          details.deviceType === "camera" ||
+          details.deviceType === "speaker";
+        logger.debug("Device permission", {
+          deviceType: details.deviceType,
+          origin: details.origin,
+          allowed,
+        });
+        return allowed;
+      });
+    }
   }
 
   setupGlobalShortcuts() {
@@ -379,16 +432,16 @@ class ApplicationController {
   }
 
   setupServiceEventHandlers() {
+    // Single path for UI + chat window: windowManager broadcasts to all
+    // renderers and shows/hides the chat overlay. Speech service only emits
+    // events — do not also call global.windowManager from speech.service or
+    // getUserMedia will race against a second start/stop cycle.
     speechService.on("recording-started", () => {
-      BrowserWindow.getAllWindows().forEach((window) => {
-        window.webContents.send("recording-started");
-      });
+      windowManager.handleRecordingStarted();
     });
 
     speechService.on("recording-stopped", () => {
-      BrowserWindow.getAllWindows().forEach((window) => {
-        window.webContents.send("recording-stopped");
-      });
+      windowManager.handleRecordingStopped();
     });
 
     speechService.on("transcription", (text) => {
@@ -452,10 +505,47 @@ class ApplicationController {
       return speechService.getStatus();
     });
 
-    // Raw PCM audio captured by the renderer's Web Audio API (Windows Whisper path)
+    // Raw PCM audio captured by the renderer's Web Audio API (Windows/macOS path)
+    let _audioChunkLogCounter = 0;
     ipcMain.on("audio-chunk", (_event, data) => {
       if (data && data.buffer) {
+        _audioChunkLogCounter++;
+        // Log first few chunks at info level so we can confirm the renderer
+        // capture pipeline is actually delivering audio to the main process.
+        if (_audioChunkLogCounter <= 5) {
+          logger.info('Received audio chunk from renderer', {
+            chunkNumber: _audioChunkLogCounter,
+            bytes: data.buffer.byteLength || data.buffer.length
+          });
+        } else if (_audioChunkLogCounter % 50 === 0) {
+          logger.debug('Audio chunks received', { count: _audioChunkLogCounter });
+        }
         speechService.handleAudioChunkFromRenderer(Buffer.from(data.buffer));
+      }
+    });
+
+    // Renderer audio capture errors — surface them to the terminal so the
+    // user can see what went wrong (renderer console.log goes to DevTools).
+    ipcMain.on("audio-capture-error", (_event, data) => {
+      logger.error('Renderer audio capture failed', {
+        error: (data && (data.error || data.message)) || 'unknown',
+        name: (data && data.name) || 'Error',
+        constraint: (data && data.constraint) || undefined,
+        stack: (data && data.stack) || undefined
+      });
+    });
+
+    // Lifecycle/status pings from the renderer capture pipeline. Renderer
+    // console logs are not visible in the terminal, so this lets us trace
+    // where capture stalls directly from main-process logs.
+    let _captureStatusLogCounter = 0;
+    ipcMain.on("audio-capture-status", (_event, data) => {
+      _captureStatusLogCounter++;
+      if (_captureStatusLogCounter <= 20 || (data && data.stage === 'error')) {
+        logger.info('Renderer capture status', {
+          stage: data && data.stage,
+          detail: data && data.detail
+        });
       }
     });
 
@@ -842,18 +932,6 @@ class ApplicationController {
       return { success: true };
     });
 
-    // LLM window specific handlers
-    ipcMain.handle("expand-llm-window", (event, contentMetrics) => {
-      windowManager.expandLLMWindow(contentMetrics);
-      return { success: true, contentMetrics };
-    });
-
-    ipcMain.handle("resize-llm-window-for-content", (event, contentMetrics) => {
-      // Use the same expansion logic for now, can be enhanced later
-      windowManager.expandLLMWindow(contentMetrics);
-      return { success: true, contentMetrics };
-    });
-
     ipcMain.handle("quit-app", () => {
       logger.info("Quit app requested via IPC");
       try {
@@ -935,6 +1013,12 @@ class ApplicationController {
       }
     } else {
       try {
+        // Ensure the main overlay renderer is active before starting capture.
+        // The renderer's AudioContext / ScriptProcessor needs the window to
+        // be the foreground Chromium view on some Windows configurations.
+        if (windowManager && typeof windowManager.showMainWindow === 'function') {
+          windowManager.showMainWindow().catch(() => {});
+        }
         speechService.startRecording();
         windowManager.showChatWindow();
         logger.info("Speech recognition started via global shortcut");
@@ -1061,12 +1145,10 @@ class ApplicationController {
     const startTime = Date.now();
 
     try {
-      windowManager.showLLMLoading();
 
   const capture = await captureService.captureAndProcess();
 
       if (!capture.imageBuffer || !capture.imageBuffer.length) {
-        windowManager.hideLLMResponse();
         this.broadcastOCRError("Failed to capture screenshot image");
         return;
       }
@@ -1116,20 +1198,12 @@ class ApplicationController {
       });
 
       this.broadcastTranscriptionLLMResponse(llmResult);
-
-      windowManager.showLLMResponse(llmResult.response, {
-        skill: this.activeSkill,
-        processingTime: llmResult.metadata.processingTime,
-        usedFallback: llmResult.metadata.usedFallback,
-        isImageAnalysis: true
-      });
     } catch (error) {
       logger.error("Screenshot OCR process failed", {
         error: error.message,
         duration: Date.now() - startTime,
       });
 
-      windowManager.hideLLMResponse();
       this.broadcastOCRError(error.message);
       
       sessionManager.addConversationEvent({
@@ -1158,8 +1232,6 @@ class ApplicationController {
         messageId,
         skill: this.activeSkill
       });
-      windowManager.showLLMLoading();
-
       const llmResult = await llmService.processTextWithSkillStream(
         text,
         this.activeSkill,
@@ -1190,19 +1262,12 @@ class ApplicationController {
       });
 
       this.broadcastTranscriptionLLMResponse(llmResult);
-
-      windowManager.showLLMResponse(llmResult.response, {
-        skill: this.activeSkill,
-        processingTime: llmResult.metadata.processingTime,
-        usedFallback: llmResult.metadata.usedFallback,
-      });
     } catch (error) {
       logger.error("LLM processing failed", {
         error: error.message,
         skill: this.activeSkill,
       });
 
-      windowManager.hideLLMResponse();
       sessionManager.addConversationEvent({
         role: 'system',
         content: `LLM processing failed: ${error.message}`,
@@ -1323,10 +1388,6 @@ class ApplicationController {
         messageId,
         skill: this.activeSkill
       });
-      // Surface the overlay immediately so streamed tokens are visible there
-      // too, instead of the overlay only appearing once the full answer lands.
-      windowManager.showLLMLoading();
-
       const llmResult = await llmService.processTranscriptionWithIntelligentResponseStream(
         cleanText,
         this.activeSkill,
@@ -1351,16 +1412,6 @@ class ApplicationController {
 
       // Send response to chat windows
       this.broadcastTranscriptionLLMResponse(llmResult);
-
-      // Also display in the overlay (LLM response) window so the answer
-      // appears in both the chat panel and the floating overlay, mirroring
-      // the behaviour of screenshot/image responses.
-      windowManager.showLLMResponse(llmResult.response, {
-        skill: this.activeSkill,
-        processingTime: llmResult.metadata.processingTime,
-        usedFallback: llmResult.metadata.usedFallback,
-        isTranscriptionResponse: true
-      });
 
       logger.info("Transcription LLM response completed", {
         responseLength: llmResult.response.length,
@@ -1395,13 +1446,6 @@ class ApplicationController {
         });
 
         this.broadcastTranscriptionLLMResponse(fallbackResult);
-        // Mirror to overlay window for consistency
-        windowManager.showLLMResponse(fallbackResult.response, {
-          skill: this.activeSkill,
-          processingTime: fallbackResult.metadata.processingTime,
-          usedFallback: true,
-          isTranscriptionResponse: true
-        });
         logger.info("Used fallback response for transcription", {
           skill: this.activeSkill,
           fallbackResponse: fallbackResult.response
