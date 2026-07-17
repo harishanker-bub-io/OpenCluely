@@ -92,6 +92,7 @@ class SpeechService extends EventEmitter {
       file: fs.createReadStream(filePath),
       model: 'whisper-large-v3-turbo',
       temperature: 0,
+      language: 'en',
       response_format: 'verbose_json',
     });
     const text = String(transcription && transcription.text || '').trim();
