@@ -7,12 +7,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const closeButton = document.getElementById('closeButton');
     const quitButton = document.getElementById('quitButton');
     const speechProviderSelect = document.getElementById('speechProvider');
-    const azureKeyInput = document.getElementById('azureKey');
-    const azureRegionInput = document.getElementById('azureRegion');
-    const whisperCommandInput = document.getElementById('whisperCommand');
-    const whisperModelInput = document.getElementById('whisperModel');
-    const whisperLanguageInput = document.getElementById('whisperLanguage');
-    const whisperSegmentMsInput = document.getElementById('whisperSegmentMs');
+    const assemblyaiKeyInput = document.getElementById('assemblyaiKey');
     const geminiKeyInput = document.getElementById('geminiKey');
     const groqKeyInput = document.getElementById('groqKey');
     const groqSpeechKeyInput = document.getElementById('groqSpeechKey');
@@ -183,15 +178,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // Function to load settings into UI
     const loadSettingsIntoUI = (settings) => {
         if (settings.speechProvider && speechProviderSelect) speechProviderSelect.value = settings.speechProvider;
-        // Always set the input value, even if empty, so the user sees what's
-        // currently configured (including env-derived defaults). Previously
-        // empty strings were skipped which left stale UI values.
-        if (azureKeyInput) azureKeyInput.value = settings.azureKey || '';
-        if (azureRegionInput) azureRegionInput.value = settings.azureRegion || '';
-        if (whisperCommandInput) whisperCommandInput.value = settings.whisperCommand || '';
-        if (whisperModelInput) whisperModelInput.value = settings.whisperModel || '';
-        if (whisperLanguageInput) whisperLanguageInput.value = settings.whisperLanguage || '';
-        if (whisperSegmentMsInput) whisperSegmentMsInput.value = settings.whisperSegmentMs || '';
+        if (assemblyaiKeyInput) assemblyaiKeyInput.value = settings.assemblyaiKey || '';
         if (geminiKeyInput) geminiKeyInput.value = settings.geminiKey || '';
         if (groqKeyInput) groqKeyInput.value = settings.groqKey || '';
         if (groqSpeechKeyInput) groqSpeechKeyInput.value = settings.groqKey || '';
@@ -253,12 +240,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const saveSettings = () => {
         const settings = {};
         if (speechProviderSelect) settings.speechProvider = speechProviderSelect.value;
-        if (azureKeyInput) settings.azureKey = azureKeyInput.value;
-        if (azureRegionInput) settings.azureRegion = azureRegionInput.value;
-        if (whisperCommandInput) settings.whisperCommand = whisperCommandInput.value;
-        if (whisperModelInput) settings.whisperModel = whisperModelInput.value;
-        if (whisperLanguageInput) settings.whisperLanguage = whisperLanguageInput.value;
-        if (whisperSegmentMsInput) settings.whisperSegmentMs = whisperSegmentMsInput.value;
+        if (assemblyaiKeyInput) settings.assemblyaiKey = assemblyaiKeyInput.value;
         if (geminiKeyInput) settings.geminiKey = geminiKeyInput.value;
         if (groqKeyInput) settings.groqKey = groqKeyInput.value;
         if (groqSpeechKeyInput) settings.groqKey = groqSpeechKeyInput.value;
@@ -274,42 +256,22 @@ document.addEventListener('DOMContentLoaded', () => {
     };
 
     const updateSpeechFieldStates = () => {
-        const provider = speechProviderSelect ? speechProviderSelect.value : 'azure';
+        const provider = speechProviderSelect ? speechProviderSelect.value : 'groq';
 
-        // Show/hide provider-specific field groups instead of just disabling
-        // them. This keeps the settings UI clean — only the relevant fields
-        // for the selected provider are visible.
-        const azureGroup = document.getElementById('azureFields');
-        const whisperGroup = document.getElementById('whisperFields');
-        const azureNote = document.getElementById('azureFieldsNote');
+        const groqGroup = document.getElementById('groqSpeechFields');
+        const assemblyaiGroup = document.getElementById('assemblyaiSpeechFields');
 
-        if (azureGroup) {
-            azureGroup.style.display = provider === 'azure' ? '' : 'none';
+        if (groqGroup) {
+            groqGroup.style.display = provider === 'groq' ? '' : 'none';
         }
-        if (whisperGroup) {
-            whisperGroup.style.display = provider === 'whisper' ? '' : 'none';
+        if (assemblyaiGroup) {
+            assemblyaiGroup.style.display = provider === 'assemblyai' ? '' : 'none';
         }
-        if (azureNote) {
-            azureNote.style.display = provider === 'azure' ? '' : 'none';
-        }
-
-        // Also toggle disabled attribute for any leftover direct field refs
-        [azureKeyInput, azureRegionInput].forEach(input => {
-            if (input) input.disabled = provider !== 'azure';
-        });
-        [whisperCommandInput, whisperModelInput, whisperLanguageInput, whisperSegmentMsInput].forEach(input => {
-            if (input) input.disabled = provider !== 'whisper';
-        });
     };
 
     // Add event listeners for all inputs
     const inputs = [
-        azureKeyInput,
-        azureRegionInput,
-        whisperCommandInput,
-        whisperModelInput,
-        whisperLanguageInput,
-        whisperSegmentMsInput,
+        assemblyaiKeyInput,
         geminiKeyInput,
         groqKeyInput,
         groqSpeechKeyInput,

@@ -1638,6 +1638,8 @@ class ApplicationController {
 
       geminiKey: process.env.GEMINI_API_KEY || "",
       groqKey: process.env.GROQ_API_KEY || "",
+      assemblyaiKey: process.env.ASSEMBLYAI_API_KEY || "",
+      speechProvider: process.env.SPEECH_PROVIDER || 'groq',
       llmProvider: process.env.LLM_PROVIDER || config.get('llm.provider') || 'gemini',
       speechAvailable: this.speechAvailable
     };
@@ -1690,26 +1692,11 @@ class ApplicationController {
       // Writing to .env ensures they survive app restarts and are picked
       // up the next time the app boots.
       const envUpdates = {};
-      if (settings.speechProvider === "azure" || settings.speechProvider === "whisper") {
+      if (settings.speechProvider === "groq" || settings.speechProvider === "assemblyai") {
         envUpdates.SPEECH_PROVIDER = settings.speechProvider;
       }
-      if (settings.azureKey !== undefined) {
-        envUpdates.AZURE_SPEECH_KEY = settings.azureKey;
-      }
-      if (settings.azureRegion !== undefined) {
-        envUpdates.AZURE_SPEECH_REGION = settings.azureRegion;
-      }
-      if (settings.whisperCommand !== undefined) {
-        envUpdates.WHISPER_COMMAND = settings.whisperCommand;
-      }
-      if (settings.whisperModel !== undefined) {
-        envUpdates.WHISPER_MODEL = settings.whisperModel;
-      }
-      if (settings.whisperLanguage !== undefined) {
-        envUpdates.WHISPER_LANGUAGE = settings.whisperLanguage;
-      }
-      if (settings.whisperSegmentMs !== undefined) {
-        envUpdates.WHISPER_SEGMENT_MS = String(settings.whisperSegmentMs);
+      if (settings.assemblyaiKey !== undefined) {
+        envUpdates.ASSEMBLYAI_API_KEY = settings.assemblyaiKey;
       }
       if (settings.geminiKey !== undefined) {
         envUpdates.GEMINI_API_KEY = settings.geminiKey;
@@ -1721,11 +1708,8 @@ class ApplicationController {
         envUpdates.LLM_PROVIDER = settings.llmProvider;
       }
 
-      // Capture the previous whisper command BEFORE persisting — persistEnvUpdates
-      // mutates process.env in place, so comparing afterwards would always read
-      // equal and skip the speech re-init below (the exact stale-mic-after-install
-      // bug the re-init guards against).
-      const prevWhisperCommand = process.env.WHISPER_COMMAND || '';
+    // Capture the previous speech provider BEFORE persisting so we can detect changes
+      const prevSpeechProvider = process.env.SPEECH_PROVIDER || 'groq';
 
       const persistedKeys = this.persistEnvUpdates(envUpdates);
 
@@ -1744,16 +1728,13 @@ class ApplicationController {
         }
       }
 
-      // Reinitialize speech service when provider OR whisper command
-      // changes. Without the second check, the install flow (which
-      // writes a new whisperCommand after install but keeps the same
-      // provider) would leave the speech service pointing at a stale
-      // (or non-existent) binary, and the main overlay's mic button
-      // would stay hidden / non-functional.
-      const providerChanged = settings.speechProvider && speechService.provider !== settings.speechProvider;
-      const whisperCommandChanged = settings.whisperCommand !== undefined &&
-        prevWhisperCommand !== String(settings.whisperCommand || '');
-      if (providerChanged || whisperCommandChanged || settings.groqKey !== undefined) {
+      // Reinitialize speech service when provider changes or when the
+      // API key for the currently active provider is updated.
+      const providerChanged = settings.speechProvider && prevSpeechProvider !== settings.speechProvider;
+      const activeProvider = settings.speechProvider || prevSpeechProvider;
+      const relevantKeyChanged = (activeProvider === 'assemblyai' && settings.assemblyaiKey !== undefined)
+        || (activeProvider === 'groq' && settings.groqKey !== undefined);
+      if (providerChanged || relevantKeyChanged) {
         try {
           speechService.initializeClient();
           this.speechAvailable = speechService.isAvailable

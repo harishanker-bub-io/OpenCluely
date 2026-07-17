@@ -374,10 +374,31 @@
                     </div>
                     <div class="settings-item">
                         <div>
-                            <div class="settings-item-label">Groq API key</div>
-                            <div class="settings-item-description">Required for voice transcription, even when Gemini answers chats</div>
+                            <div class="settings-item-label">Speech-to-text provider</div>
+                            <div class="settings-item-description">Groq (Whisper) or AssemblyAI for transcription</div>
                         </div>
-                        <input type="password" class="input-field" id="groqSpeechKey" placeholder="gsk_…">
+                        <select class="input-field" id="speechProvider">
+                            <option value="groq">Groq (Whisper)</option>
+                            <option value="assemblyai">AssemblyAI</option>
+                        </select>
+                    </div>
+                    <div id="groqSpeechFields">
+                        <div class="settings-item">
+                            <div>
+                                <div class="settings-item-label">Groq API key</div>
+                                <div class="settings-item-description">Get your key from console.groq.com</div>
+                            </div>
+                            <input type="password" class="input-field" id="groqSpeechKey" placeholder="gsk_…">
+                        </div>
+                    </div>
+                    <div id="assemblyaiSpeechFields" style="display:none;">
+                        <div class="settings-item">
+                            <div>
+                                <div class="settings-item-label">AssemblyAI API key</div>
+                                <div class="settings-item-description">Get your key from assemblyai.com</div>
+                            </div>
+                            <input type="password" class="input-field" id="assemblyaiKey" placeholder="Enter your AssemblyAI API key">
+                        </div>
                     </div>
                     <div class="settings-item" style="align-items:center; gap:8px;">
                         <button class="btn" id="refreshMicrophones" type="button">Refresh microphones</button>

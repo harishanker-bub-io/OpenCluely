@@ -69,7 +69,16 @@ class ConfigManager {
       },
 
       speech: {
-        provider: 'azure',
+        provider: 'groq',
+        assemblyai: {
+          model: 'universal-3-5-pro',
+          languageDetection: true,
+          pollIntervalMs: 3000,
+          timeoutMs: 60000
+        },
+        groq: {
+          model: 'whisper-large-v3-turbo'
+        },
         azure: {
           language: 'en-US',
           enableDictation: true,

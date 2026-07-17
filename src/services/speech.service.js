@@ -3,11 +3,12 @@ const { EventEmitter } = require('events');
 const { Groq } = require('groq-sdk');
 const config = require('../core/config');
 const logger = require('../core/logger').createServiceLogger('SPEECH');
+const assemblyaiTranscriber = require('./assemblyai-transcription.service');
 
 class SpeechService extends EventEmitter {
   constructor() {
     super();
-    this.provider = 'groq';
+    this.provider = process.env.SPEECH_PROVIDER || 'groq';
     this.isRecording = false;
     this.available = false;
     this.client = null;
@@ -15,6 +16,19 @@ class SpeechService extends EventEmitter {
   }
 
   initializeClient() {
+    this.provider = process.env.SPEECH_PROVIDER || 'groq';
+
+    if (this.provider === 'assemblyai') {
+      const apiKey = process.env.ASSEMBLYAI_API_KEY;
+      this.available = Boolean(apiKey && apiKey !== 'your_assemblyai_api_key_here');
+      this.client = null; // No SDK client needed for AssemblyAI (uses fetch)
+      this.emit('status', this.available
+        ? 'AssemblyAI voice transcription ready'
+        : 'Add an AssemblyAI API key to enable voice transcription');
+      return;
+    }
+
+    // Default: Groq
     const apiKey = config.getApiKey('GROQ');
     this.available = Boolean(apiKey && apiKey !== 'your_groq_api_key_here');
     this.client = this.available ? new Groq({ apiKey }) : null;
@@ -37,7 +51,8 @@ class SpeechService extends EventEmitter {
 
   startRecording() {
     if (!this.available) {
-      const error = 'Groq voice transcription is unavailable. Add a Groq API key in Settings.';
+      const providerName = this.provider === 'assemblyai' ? 'AssemblyAI' : 'Groq';
+      const error = `${providerName} voice transcription is unavailable. Add a ${providerName} API key in Settings.`;
       this.emit('error', error);
       return this.getStatus();
     }
@@ -57,13 +72,21 @@ class SpeechService extends EventEmitter {
   }
 
   async transcribeFile(filePath, fileName = 'recording.webm') {
-    if (!this.available || !this.client) {
-      throw new Error('Groq voice transcription is unavailable. Add a Groq API key in Settings.');
+    if (!this.available) {
+      const providerName = this.provider === 'assemblyai' ? 'AssemblyAI' : 'Groq';
+      throw new Error(`${providerName} voice transcription is unavailable. Add a ${providerName} API key in Settings.`);
     }
     if (!fs.existsSync(filePath)) {
       throw new Error('Recorded audio file was not found');
     }
 
+    // Route to the correct provider
+    if (this.provider === 'assemblyai') {
+      logger.info('Transcribing with AssemblyAI', { fileName });
+      return await assemblyaiTranscriber.transcribe(filePath);
+    }
+
+    // Default: Groq / Whisper
     logger.info('Submitting completed recording to Groq', { fileName });
     const transcription = await this.client.audio.transcriptions.create({
       file: fs.createReadStream(filePath),
