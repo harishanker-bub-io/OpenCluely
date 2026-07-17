@@ -183,14 +183,15 @@ class SessionManager {
   /**
    * Add user transcription or chat input
    */
-  addUserInput(text, source = 'chat') {
+  addUserInput(text, source = 'chat', metadata = {}) {
     return this.addConversationEvent({
       role: 'user',
       content: text,
       action: source === 'speech' ? 'speech_transcription' : 'chat_input',
       metadata: {
         source,
-        textLength: text.length
+        textLength: text.length,
+        ...metadata
       }
     });
   }
@@ -277,7 +278,9 @@ class SessionManager {
       content: event.content,
       timestamp: event.timestamp,
       skill: event.skill,
-      action: event.action
+      action: event.action,
+      audio: event.metadata && event.metadata.audio ? event.metadata.audio : null,
+      audioError: event.metadata && event.metadata.audioError ? event.metadata.audioError : null
     }));
   }
 
@@ -296,7 +299,9 @@ class SessionManager {
       content: event.content,
       timestamp: event.timestamp,
       skill: event.skill,
-      action: event.action
+      action: event.action,
+      audio: event.metadata && event.metadata.audio ? event.metadata.audio : null,
+      audioError: event.metadata && event.metadata.audioError ? event.metadata.audioError : null
     }));
   }
 

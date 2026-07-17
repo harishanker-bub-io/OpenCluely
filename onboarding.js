@@ -58,11 +58,11 @@
 
   // Screens are: welcome → apikey → speech → whisper? → finish
   // The whisper screen is only visited if state.speechProvider === 'whisper'
-  const stepScreens = ['welcome', 'apikey', 'speech'];
+  const stepScreens = ['welcome', 'apikey'];
 
   // ── Step rendering ────────────────────────────────────────────────
   function totalSteps() {
-    return stepScreens.length + (state.speechProvider === 'whisper' ? 1 : 0) + 1;
+    return stepScreens.length + 1;
   }
 
   function refreshStepper() {
@@ -116,11 +116,7 @@
 
   // Order depends on choices — e.g. whisper path inserts the install screen.
   function computeScreenOrder() {
-    const out = ['welcome', 'apikey', 'speech'];
-    if (state.speechProvider === 'whisper') out.push('whisper');
-    if (state.speechProvider === 'whisper') out.push('model-download');
-    out.push('finish');
-    return out;
+    return ['welcome', 'apikey', 'finish'];
   }
 
   // Map a screen name to its position in the stepper (0..n).

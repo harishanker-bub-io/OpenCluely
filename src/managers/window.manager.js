@@ -52,7 +52,7 @@ class WindowManager {
       },
       settings: {
         width: 400,
-        height: 380,
+        height: 520,
         file: 'settings.html',
         title: 'Settings',
         frame: false,

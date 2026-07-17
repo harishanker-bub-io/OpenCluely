@@ -34,7 +34,7 @@ It is free and open source. Processing stays on your machine, and the only thing
 
 - **Invisible overlay.** Windows stay out of Zoom, Google Meet, Microsoft Teams, Discord, and OBS captures. You see the answer, the call does not.
 - **Hidden during screen share.** When a share starts, the app can hide every window on its own.
-- **Real-time voice.** Speech is split on natural pauses instead of a fixed timer, so one spoken question stays one question. Filler phrases that Whisper invents on silence are dropped before they reach the model.
+- **Reliable voice messages.** Record up to one minute, then Groq Whisper transcribes the completed audio and the chat keeps a playable copy.
 - **Streamed answers.** Replies appear word by word as the model generates them, in both the chat and the floating window.
 - **Direct image analysis.** Screenshots go straight to Gemini for visual reasoning, with no slow OCR step in between.
 - **Session memory.** The whole conversation is remembered, so follow-ups, edge cases, and optimizations keep their context.
@@ -75,7 +75,7 @@ If you would rather build from source, three steps are all it takes.
    ./setup.sh
    ```
 
-   The script installs Node dependencies, creates your `.env` from the example, sets up a local Whisper virtual environment, points the config at it, and launches the app.
+   The script installs Node dependencies, creates your `.env` from the example, and launches the app.
 
 3. Add your Gemini key.
 
@@ -93,8 +93,6 @@ If you would rather build from source, three steps are all it takes.
 ./setup.sh --build                # Build a distributable for your OS
 ./setup.sh --ci                   # Use npm ci instead of npm install
 ./setup.sh --no-run               # Set up only, do not launch
-./setup.sh --install-system-deps  # Install sox for the microphone (optional)
-./setup.sh --skip-whisper         # Skip the local Whisper bootstrap
 ```
 
 ## Configuration
@@ -105,33 +103,19 @@ The setup script writes sensible defaults. The only required value is a Gemini A
 # Required
 GEMINI_API_KEY=your_gemini_api_key_here
 
-# Optional speech provider. Pick one.
-SPEECH_PROVIDER=whisper
-
-# Azure option
-AZURE_SPEECH_KEY=your_azure_speech_key
-AZURE_SPEECH_REGION=your_region
-
-# Local Whisper option
-WHISPER_COMMAND=whisper
-WHISPER_MODEL_DIR=.whisper-models
-WHISPER_MODEL=turbo
-WHISPER_LANGUAGE=en
+# Required for voice messages, independently of the selected LLM provider
+GROQ_API_KEY=your_groq_api_key_here
 ```
 
-Speech is optional. If no provider is configured, the microphone button hides itself across the app.
+Voice messages use Groq `whisper-large-v3-turbo`. Select and test the microphone in Settings; recordings stop automatically after one minute and remain playable in chat until history is cleared.
 
 ## Optional voice setup
 
-You can use local Whisper for offline transcription or Azure Speech for a cloud option.
-
-For local Whisper, `./setup.sh` handles the full setup. It creates `.venv-whisper`, installs `openai-whisper`, points `.env` at the virtual environment, creates `.whisper-models`, and runs a quick speech test. You only need Python 3.10 or newer and ffmpeg on your system. Install those with `./setup.sh --install-system-deps`, or add `ffmpeg` and `sox` yourself.
-
-For Azure Speech, create a Speech resource in the [Azure Portal](https://portal.azure.com/), then add the key and region to `.env` with `SPEECH_PROVIDER=azure`.
+Voice messages are transcribed with Groq Whisper. A Groq API key is required even when Gemini is selected for answers.
 
 ## How it works
 
-1. **Ask.** Speak the question or press the screenshot shortcut. The microphone listens for natural pauses on its own and does not cut you off mid sentence.
+1. **Ask.** Record a voice message or press the screenshot shortcut. Voice recording is capped at one minute.
 2. **Reason.** Gemini reads the audio or image with full conversation context and works toward a precise answer.
 3. **Answer.** The response streams into the overlay in real time, with formatted text and highlighted code.
 

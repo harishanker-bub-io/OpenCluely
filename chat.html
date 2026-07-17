@@ -807,6 +807,8 @@
       function renderHistoryItem(item) {
         if (item.kind === 'message') {
           addMessage(item.text, item.type, true);
+        } else if (item.kind === 'voice') {
+          addVoiceMessage(item.text, item.audio, true, item.error);
         } else if (item.kind === 'snippet') {
           addCodeSnippet(item.language, item.code, true);
         } else if (item.kind === 'image') {
@@ -870,7 +872,16 @@
               let type = 'user';
               if (event.action === 'speech_transcription') type = 'transcription';
               else if (event.action === 'ocr_extraction') type = 'system';
-              newChatHistory.push({ kind: 'message', type, text: event.content });
+              if (event.audio) {
+                newChatHistory.push({
+                  kind: 'voice',
+                  text: event.action === 'speech_transcription' ? event.content : '',
+                  audio: event.audio,
+                  error: event.audioError || null,
+                });
+              } else {
+                newChatHistory.push({ kind: 'message', type, text: event.content });
+              }
             }
           });
 
@@ -935,13 +946,16 @@
         }
       }
 
-      function clearChatHistory(skipConfirm = false) {
+      function clearChatHistory(skipConfirm = false, skipMainClear = false) {
         if (!skipConfirm) {
           const ok = confirm('Clear chat history?');
           if (!ok) return;
         }
         chatHistory = [];
         saveHistory();
+        if (!skipMainClear && window.electronAPI && window.electronAPI.clearSessionMemory) {
+          window.electronAPI.clearSessionMemory().catch(error => console.warn('Failed to clear persisted audio', error));
+        }
         // Clear DOM
         if (chatMessages) chatMessages.innerHTML = '';
         // Clear IndexedDB images too
@@ -1112,6 +1126,56 @@
         }
       }
 
+      async function addVoiceMessage(text, audio, skipPersist = false, error = null) {
+        if (!chatMessages || !audio || !audio.recordingId) return;
+        const existing = chatMessages.querySelector(`[data-recording-id="${audio.recordingId}"]`);
+        if (existing) {
+          updateVoiceMessage(text, audio, error);
+          return;
+        }
+        const messageDiv = document.createElement('div');
+        messageDiv.className = 'message transcription voice-message';
+        messageDiv.dataset.recordingId = audio.recordingId;
+        const timeDiv = document.createElement('div');
+        timeDiv.className = 'message-time';
+        timeDiv.textContent = new Date().toLocaleTimeString();
+        const audioElement = document.createElement('audio');
+        audioElement.controls = true;
+        audioElement.preload = 'metadata';
+        const textDiv = document.createElement('div');
+        textDiv.className = 'message-text voice-transcript';
+        textDiv.textContent = error ? `Transcription failed: ${error}` : (text || 'Transcribing audio…');
+        messageDiv.append(timeDiv, audioElement, textDiv);
+        chatMessages.appendChild(messageDiv);
+        chatMessages.scrollTop = chatMessages.scrollHeight;
+        if (!skipPersist) {
+          chatHistory.push({ kind: 'voice', text: text || '', audio, error });
+          saveHistory();
+        }
+        try {
+          const recording = await window.electronAPI.getAudioRecording(audio.recordingId);
+          if (!recording || !recording.success) throw new Error(recording && recording.error || 'Recording unavailable');
+          const bytes = recording.bytes instanceof Uint8Array
+            ? recording.bytes
+            : new Uint8Array(recording.bytes && recording.bytes.data || recording.bytes);
+          audioElement.src = URL.createObjectURL(new Blob([bytes], { type: recording.mimeType || audio.mimeType || 'audio/webm' }));
+        } catch (loadError) {
+          textDiv.textContent = `${text || 'Audio message'} (audio unavailable: ${loadError.message})`;
+        }
+      }
+
+      function updateVoiceMessage(text, audio, error = null) {
+        const messageDiv = chatMessages && chatMessages.querySelector(`[data-recording-id="${audio.recordingId}"]`);
+        const textDiv = messageDiv && messageDiv.querySelector('.voice-transcript');
+        if (textDiv) textDiv.textContent = error ? `Transcription failed: ${error}` : text;
+        const item = chatHistory.find(entry => entry.kind === 'voice' && entry.audio && entry.audio.recordingId === audio.recordingId);
+        if (item) {
+          item.text = text || '';
+          item.error = error || null;
+          saveHistory();
+        }
+      }
+
       // Markdown formatter using markdown.js library (Maruku dialect for table support)
       function formatMarkdown(text) {
         if (!text) return '';
@@ -1172,7 +1236,7 @@
           listeningTimer = setInterval(() => {
             if (listeningStartTime && listeningDuration) {
               const elapsed = Math.floor((Date.now() - listeningStartTime) / 1000);
-              listeningDuration.textContent = `${elapsed}s`;
+              listeningDuration.textContent = `${Math.min(elapsed, 60)}s / 60s`;
             }
           }, 1000);
         }
@@ -1233,17 +1297,20 @@
         }
 
         hideListeningAnimation();
-        addMessage('Stopped Listening', 'system');
       }
 
-      function handleTranscription(text) {
+      function handleTranscription(text, audio = null) {
         if (text && typeof text === 'string' && text.trim().length > 0) {
           // Hide listening animation first
           hideListeningAnimation();
 
           // Show transcribed text with slight delay for smooth transition
           setTimeout(() => {
-            addMessage(text.trim(), 'transcription');
+            if (audio) {
+              const existing = chatMessages && chatMessages.querySelector(`[data-recording-id="${audio.recordingId}"]`);
+              if (existing) updateVoiceMessage(text.trim(), audio);
+              else addVoiceMessage(text.trim(), audio);
+            } else addMessage(text.trim(), 'transcription');
             
             // Show thinking indicator after transcription
             setTimeout(() => {
@@ -1394,7 +1461,7 @@
       if (whysperAPI) {
         whysperAPI.onTranscriptionReceived((event, data) => {
           if (data && data.text) {
-            handleTranscription(data.text);
+            handleTranscription(data.text, data.audio || null);
           } else {
             console.warn('Invalid transcription data received:', data);
           }
@@ -1406,10 +1473,25 @@
           }
         });
 
+        whysperAPI.onAudioRecordingSaved((event, data) => {
+          if (data && data.recording) addVoiceMessage('', data.recording);
+        });
+
+        whysperAPI.onAudioTranscriptionFailed((event, data) => {
+          if (!data || !data.recordingId) return;
+          updateVoiceMessage('', { recordingId: data.recordingId }, data.error || 'Unable to transcribe audio');
+        });
+
         // Listen for speech status
         whysperAPI.onSpeechStatus((event, data) => {
           if (data && data.status) {
-            addMessage(data.status, 'system');
+            const routineAudioStatus = [
+              'Recording audio',
+              'Processing audio',
+              'Transcribing audio',
+              'One-minute recording limit reached; transcribing audio',
+            ].includes(data.status);
+            if (!routineAudioStatus) addMessage(data.status, 'system');
 
             if (data.status.includes('started') || data.status.includes('Recording')) {
               handleRecordingStarted();
@@ -1437,6 +1519,7 @@
         });
 
         whysperAPI.onSessionCleared(() => {
+          clearChatHistory(true, true);
           addMessage('Session memory has been cleared', 'system');
         });
 

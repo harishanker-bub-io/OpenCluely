@@ -15,6 +15,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const whisperSegmentMsInput = document.getElementById('whisperSegmentMs');
     const geminiKeyInput = document.getElementById('geminiKey');
     const groqKeyInput = document.getElementById('groqKey');
+    const groqSpeechKeyInput = document.getElementById('groqSpeechKey');
     const llmProviderSelect = document.getElementById('llmProvider');
     const windowGapInput = document.getElementById('windowGap');
     const windowOpacitySlider = document.getElementById('windowOpacity');
@@ -23,6 +24,19 @@ document.addEventListener('DOMContentLoaded', () => {
     const activeSkillSelect = document.getElementById('activeSkill');
     const resumeInput = document.getElementById('resumeInput');
     const iconGrid = document.getElementById('iconGrid');
+    const microphoneDeviceSelect = document.getElementById('microphoneDevice');
+    const refreshMicrophonesButton = document.getElementById('refreshMicrophones');
+    const startMicTestButton = document.getElementById('startMicTest');
+    const stopMicTestButton = document.getElementById('stopMicTest');
+    const micTestStatus = document.getElementById('micTestStatus');
+    const micLevel = document.getElementById('micLevel');
+    const micTestPlayback = document.getElementById('micTestPlayback');
+    let micTestStream = null;
+    let micTestRecorder = null;
+    let micTestContext = null;
+    let micTestFrame = null;
+    let micTestStopTimer = null;
+    let micTestChunks = [];
 
     // Check if window.api exists
     if (!window.api) {
@@ -44,6 +58,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // Close button handler
     if (closeButton) {
         closeButton.addEventListener('click', () => {
+            stopMicrophoneTest();
             window.api.send('close-settings');
         });
     }
@@ -74,6 +89,97 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
+    const setMicTestStatus = (message) => {
+        if (micTestStatus) micTestStatus.textContent = message;
+    };
+
+    const stopMicrophoneTest = () => {
+        if (micTestStopTimer) clearTimeout(micTestStopTimer);
+        micTestStopTimer = null;
+        if (micTestFrame) cancelAnimationFrame(micTestFrame);
+        micTestFrame = null;
+        if (micLevel) micLevel.style.width = '0%';
+        const recorder = micTestRecorder;
+        micTestRecorder = null;
+        if (recorder && recorder.state !== 'inactive') recorder.stop();
+        if (micTestStream) micTestStream.getTracks().forEach(track => track.stop());
+        micTestStream = null;
+        if (micTestContext) micTestContext.close().catch(() => {});
+        micTestContext = null;
+        if (startMicTestButton) startMicTestButton.style.display = '';
+        if (stopMicTestButton) stopMicTestButton.style.display = 'none';
+    };
+
+    const refreshMicrophones = async (selectedDeviceId = null) => {
+        if (!microphoneDeviceSelect) return;
+        const previousValue = selectedDeviceId || microphoneDeviceSelect.value || 'default';
+        try {
+            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            stream.getTracks().forEach(track => track.stop());
+            const devices = await navigator.mediaDevices.enumerateDevices();
+            const inputs = devices.filter(device => device.kind === 'audioinput');
+            microphoneDeviceSelect.replaceChildren();
+            microphoneDeviceSelect.add(new Option('System default', 'default'));
+            inputs.forEach((device, index) => {
+                microphoneDeviceSelect.add(new Option(device.label || `Microphone ${index + 1}`, device.deviceId));
+            });
+            microphoneDeviceSelect.value = [...microphoneDeviceSelect.options].some(option => option.value === previousValue)
+                ? previousValue
+                : 'default';
+            if (previousValue !== microphoneDeviceSelect.value && window.electronAPI) {
+                await window.electronAPI.saveSettings({ microphoneDeviceId: 'default' });
+            }
+            setMicTestStatus(inputs.length ? 'Microphones are ready.' : 'No microphone was found.');
+        } catch (error) {
+            setMicTestStatus(`Microphone permission is required: ${error.message}`);
+        }
+    };
+
+    const startMicrophoneTest = async () => {
+        if (!microphoneDeviceSelect || !window.MediaRecorder) {
+            setMicTestStatus('Microphone testing is not supported in this window.');
+            return;
+        }
+        stopMicrophoneTest();
+        try {
+            const deviceId = microphoneDeviceSelect.value || 'default';
+            micTestStream = await navigator.mediaDevices.getUserMedia(
+                deviceId === 'default' ? { audio: true } : { audio: { deviceId: { exact: deviceId } } }
+            );
+            const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+            micTestContext = new AudioContextClass();
+            const analyser = micTestContext.createAnalyser();
+            const samples = new Uint8Array(analyser.fftSize);
+            micTestContext.createMediaStreamSource(micTestStream).connect(analyser);
+            const drawLevel = () => {
+                analyser.getByteTimeDomainData(samples);
+                const level = samples.reduce((total, value) => total + Math.abs(value - 128), 0) / samples.length;
+                if (micLevel) micLevel.style.width = `${Math.min(100, level * 4)}%`;
+                micTestFrame = requestAnimationFrame(drawLevel);
+            };
+            drawLevel();
+            const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus') ? 'audio/webm;codecs=opus' : 'audio/webm';
+            micTestChunks = [];
+            micTestRecorder = new MediaRecorder(micTestStream, { mimeType });
+            micTestRecorder.ondataavailable = event => { if (event.data.size) micTestChunks.push(event.data); };
+            micTestRecorder.onstop = () => {
+                if (micTestChunks.length && micTestPlayback) {
+                    micTestPlayback.src = URL.createObjectURL(new Blob(micTestChunks, { type: mimeType }));
+                    micTestPlayback.style.display = '';
+                    setMicTestStatus('Test complete. Play the recording to verify your microphone.');
+                }
+            };
+            micTestRecorder.start();
+            micTestStopTimer = setTimeout(stopMicrophoneTest, 5000);
+            if (startMicTestButton) startMicTestButton.style.display = 'none';
+            if (stopMicTestButton) stopMicTestButton.style.display = '';
+            setMicTestStatus('Testing microphone for up to five seconds…');
+        } catch (error) {
+            setMicTestStatus(`Could not start microphone test: ${error.message}`);
+            stopMicrophoneTest();
+        }
+    };
+
     // Function to load settings into UI
     const loadSettingsIntoUI = (settings) => {
         if (settings.speechProvider && speechProviderSelect) speechProviderSelect.value = settings.speechProvider;
@@ -88,6 +194,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (whisperSegmentMsInput) whisperSegmentMsInput.value = settings.whisperSegmentMs || '';
         if (geminiKeyInput) geminiKeyInput.value = settings.geminiKey || '';
         if (groqKeyInput) groqKeyInput.value = settings.groqKey || '';
+        if (groqSpeechKeyInput) groqSpeechKeyInput.value = settings.groqKey || '';
         if (llmProviderSelect) llmProviderSelect.value = settings.llmProvider || 'gemini';
         if (windowGapInput) windowGapInput.value = settings.windowGap || '';
         if (windowOpacitySlider && settings.windowOpacity !== undefined) {
@@ -104,6 +211,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         if (settings.activeSkill && activeSkillSelect) activeSkillSelect.value = settings.activeSkill;
         if (settings.resume && resumeInput) resumeInput.value = settings.resume;
+        refreshMicrophones(settings.microphoneDeviceId || 'default');
 
         // Handle icon selection
         const selectedIcon = settings.selectedIcon || settings.appIcon;
@@ -153,12 +261,14 @@ document.addEventListener('DOMContentLoaded', () => {
         if (whisperSegmentMsInput) settings.whisperSegmentMs = whisperSegmentMsInput.value;
         if (geminiKeyInput) settings.geminiKey = geminiKeyInput.value;
         if (groqKeyInput) settings.groqKey = groqKeyInput.value;
+        if (groqSpeechKeyInput) settings.groqKey = groqSpeechKeyInput.value;
         if (llmProviderSelect) settings.llmProvider = llmProviderSelect.value;
         if (windowGapInput) settings.windowGap = windowGapInput.value;
         if (codingLanguageSelect) settings.codingLanguage = codingLanguageSelect.value;
         if (activeSkillSelect) settings.activeSkill = activeSkillSelect.value;
         if (resumeInput) settings.resume = resumeInput.value;
         if (windowOpacitySlider) settings.windowOpacity = parseFloat(windowOpacitySlider.value);
+        if (microphoneDeviceSelect) settings.microphoneDeviceId = microphoneDeviceSelect.value || 'default';
         
         window.api.send('save-settings', settings);
     };
@@ -202,6 +312,7 @@ document.addEventListener('DOMContentLoaded', () => {
         whisperSegmentMsInput,
         geminiKeyInput,
         groqKeyInput,
+        groqSpeechKeyInput,
         windowGapInput,
         resumeInput
     ];
@@ -218,6 +329,19 @@ document.addEventListener('DOMContentLoaded', () => {
             updateSpeechFieldStates();
             saveSettings();
         });
+    }
+
+    if (refreshMicrophonesButton) refreshMicrophonesButton.addEventListener('click', () => refreshMicrophones());
+    if (startMicTestButton) startMicTestButton.addEventListener('click', startMicrophoneTest);
+    if (stopMicTestButton) stopMicTestButton.addEventListener('click', stopMicrophoneTest);
+    if (microphoneDeviceSelect) microphoneDeviceSelect.addEventListener('change', async () => {
+        stopMicrophoneTest();
+        await window.electronAPI.saveSettings({ microphoneDeviceId: microphoneDeviceSelect.value || 'default' });
+    });
+
+    if (groqKeyInput && groqSpeechKeyInput) {
+        groqKeyInput.addEventListener('input', () => { groqSpeechKeyInput.value = groqKeyInput.value; });
+        groqSpeechKeyInput.addEventListener('input', () => { groqKeyInput.value = groqSpeechKeyInput.value; });
     }
 
     // Language selection handler
@@ -378,7 +502,9 @@ document.addEventListener('DOMContentLoaded', () => {
     // ESC key to close
     document.addEventListener('keydown', (e) => {
         if (e.key === 'Escape') {
+            stopMicrophoneTest();
             window.api.send('close-settings');
         }
     });
+    window.addEventListener('beforeunload', stopMicrophoneTest);
 }); 

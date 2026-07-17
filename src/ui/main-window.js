@@ -1051,6 +1051,88 @@ class MainWindowUI {
         }
     }
 
+    async handleRecordingStarted() {
+        this.isRecording = true;
+        if (this.micButton) this.micButton.classList.add('recording');
+        await this._startRendererAudioCapture();
+    }
+
+    handleRecordingStopped() {
+        this.isRecording = false;
+        if (this.micButton) this.micButton.classList.remove('recording');
+        this._stopRendererAudioCapture();
+    }
+
+    async _startRendererAudioCapture() {
+        this._stopRendererAudioCapture();
+        this._recordingChunks = [];
+        this._recordingStartTime = Date.now();
+        try {
+            const settings = await window.electronAPI.getSettings();
+            const deviceId = settings && settings.microphoneDeviceId || 'default';
+            let stream;
+            try {
+                stream = await navigator.mediaDevices.getUserMedia(
+                    deviceId === 'default' ? { audio: true } : { audio: { deviceId: { exact: deviceId } } }
+                );
+            } catch (error) {
+                if (deviceId === 'default') throw error;
+                stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                await window.electronAPI.saveSettings({ microphoneDeviceId: 'default' });
+            }
+            if (!this.isRecording) {
+                stream.getTracks().forEach((track) => track.stop());
+                return;
+            }
+            const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+                ? 'audio/webm;codecs=opus'
+                : 'audio/webm';
+            this._mediaStream = stream;
+            this._mediaRecorder = new MediaRecorder(stream, { mimeType });
+            this._mediaRecorder.addEventListener('dataavailable', (event) => {
+                if (event.data && event.data.size) this._recordingChunks.push(event.data);
+            });
+            this._mediaRecorder.addEventListener('stop', async () => {
+                const chunks = this._recordingChunks || [];
+                this._recordingChunks = [];
+                if (!chunks.length) return;
+                const blob = new Blob(chunks, { type: mimeType });
+                const result = await window.electronAPI.submitAudioRecording({
+                    bytes: await blob.arrayBuffer(),
+                    mimeType,
+                    durationMs: Math.max(0, Date.now() - this._recordingStartTime),
+                });
+                if (!result || !result.success) logger.error('Completed recording was not transcribed', { error: result && result.error });
+            }, { once: true });
+            this._mediaRecorder.start();
+            this._recordingTimeout = setTimeout(() => {
+                window.electronAPI.notifyRecordingTimeout();
+                window.electronAPI.stopSpeechRecognition();
+            }, 60 * 1000);
+        } catch (error) {
+            logger.error('Failed to access selected microphone', { error: error.message });
+            window.electronAPI.stopSpeechRecognition();
+        }
+    }
+
+    _stopRendererAudioCapture() {
+        if (this._recordingTimeout) {
+            clearTimeout(this._recordingTimeout);
+            this._recordingTimeout = null;
+        }
+        const recorder = this._mediaRecorder;
+        this._mediaRecorder = null;
+        if (recorder && recorder.state !== 'inactive') recorder.stop();
+        if (this._mediaStream) {
+            this._mediaStream.getTracks().forEach((track) => track.stop());
+            this._mediaStream = null;
+        }
+    }
+
+    _closeAudioContext() {
+        this._stopRendererAudioCapture();
+    }
+
     updateSkillIndicator() {
         logger.info('Updating skill indicator', {
             component: 'MainWindowUI',

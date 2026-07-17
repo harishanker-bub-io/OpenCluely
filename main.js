@@ -107,6 +107,7 @@ process.on("unhandledRejection", (reason) => {
 // Screen capture (image-based)
 const captureService = require("./src/services/capture.service");
 const speechService = require("./src/services/speech.service");
+const audioRecordingService = require("./src/services/audio-recording.service");
 const llmService = require("./src/services/llm.service");
 
 // Managers
@@ -122,6 +123,7 @@ class ApplicationController {
   this.codingLanguage = "cpp";
     this.resume = "";
     this.speechAvailable = false;
+    this.microphoneDeviceId = "default";
     this.windowOpacity = 1.0;
 
     // Utterance coalescing: VAD emits a transcript per natural pause, but a
@@ -145,9 +147,6 @@ class ApplicationController {
       envPath: ENV_PATH,
       sentinelPath: path.join(app.getPath("userData"), ".opencluely-firstrun-completed"),
     });
-    // Lazily-initialised in getWhisperInstaller() so tests can mock
-    // the constructor without polluting main-process startup.
-    this._whisperInstaller = null;
     this.isFirstRun = false;
 
     // Window configurations for reference
@@ -168,6 +167,7 @@ class ApplicationController {
         if (data.codingLanguage) this.codingLanguage = data.codingLanguage;
         if (data.activeSkill) this.activeSkill = data.activeSkill;
         if (data.windowOpacity !== undefined) this.windowOpacity = data.windowOpacity;
+        if (data.microphoneDeviceId) this.microphoneDeviceId = data.microphoneDeviceId;
         // Also feed resume to prompt-loader
         const { promptLoader } = require('./prompt-loader');
         promptLoader.setResume(this.resume || '');
@@ -262,6 +262,7 @@ class ApplicationController {
     try {
       this.setupPermissions();
       this.setupNetworkConfiguration();
+      this.speechAvailable = speechService.isAvailable();
 
       // Small delay to ensure desktop/space detection is accurate
       await new Promise((resolve) => setTimeout(resolve, 200));
@@ -444,16 +445,6 @@ class ApplicationController {
       windowManager.handleRecordingStopped();
     });
 
-    speechService.on("transcription", (text) => {
-      this.handleTranscriptionFragment(text);
-    });
-
-    speechService.on("interim-transcription", (text) => {
-      BrowserWindow.getAllWindows().forEach((window) => {
-        window.webContents.send("interim-transcription", { text });
-      });
-    });
-
     speechService.on("status", (status) => {
       this.speechAvailable = speechService.isAvailable ? speechService.isAvailable() : false;
       BrowserWindow.getAllWindows().forEach((window) => {
@@ -505,23 +496,60 @@ class ApplicationController {
       return speechService.getStatus();
     });
 
-    // Raw PCM audio captured by the renderer's Web Audio API (Windows/macOS path)
-    let _audioChunkLogCounter = 0;
-    ipcMain.on("audio-chunk", (_event, data) => {
-      if (data && data.buffer) {
-        _audioChunkLogCounter++;
-        // Log first few chunks at info level so we can confirm the renderer
-        // capture pipeline is actually delivering audio to the main process.
-        if (_audioChunkLogCounter <= 5) {
-          logger.info('Received audio chunk from renderer', {
-            chunkNumber: _audioChunkLogCounter,
-            bytes: data.buffer.byteLength || data.buffer.length
+    ipcMain.handle("submit-audio-recording", async (_event, payload) => {
+      let recording = null;
+      try {
+        recording = audioRecordingService.save(
+          payload && payload.bytes,
+          payload && payload.mimeType,
+          payload && payload.durationMs
+        );
+        windowManager.broadcastToAllWindows("audio-recording-saved", { recording });
+        windowManager.broadcastToAllWindows("speech-status", { status: "Transcribing audio", available: true });
+        const transcription = await speechService.transcribeFile(
+          audioRecordingService.getPath(recording.recordingId),
+          recording.fileName
+        );
+        await this.handleCompletedRecording(recording, transcription.text);
+        return { success: true, recording, text: transcription.text };
+      } catch (error) {
+        logger.error("Audio transcription failed", { error: error.message, recordingId: recording && recording.recordingId });
+        if (recording) {
+          sessionManager.addConversationEvent({
+            role: 'user',
+            content: `Transcription failed: ${error.message}`,
+            action: 'speech_transcription_error',
+            metadata: {
+              audio: {
+                recordingId: recording.recordingId,
+                mimeType: recording.mimeType,
+                durationMs: recording.durationMs,
+              },
+              audioError: error.message,
+            },
           });
-        } else if (_audioChunkLogCounter % 50 === 0) {
-          logger.debug('Audio chunks received', { count: _audioChunkLogCounter });
         }
-        speechService.handleAudioChunkFromRenderer(Buffer.from(data.buffer));
+        windowManager.broadcastToAllWindows("audio-transcription-failed", {
+          recordingId: recording && recording.recordingId,
+          error: error.message,
+        });
+        return { success: false, recording, error: error.message };
       }
+    });
+
+    ipcMain.handle("get-audio-recording", (_event, recordingId) => {
+      try {
+        return { success: true, ...audioRecordingService.get(recordingId) };
+      } catch (error) {
+        return { success: false, error: error.message };
+      }
+    });
+
+    ipcMain.on("audio-recording-timeout", () => {
+      windowManager.broadcastToAllWindows("speech-status", {
+        status: "One-minute recording limit reached; transcribing audio",
+        available: true,
+      });
     });
 
     // Renderer audio capture errors — surface them to the terminal so the
@@ -662,8 +690,7 @@ class ApplicationController {
     });
 
     ipcMain.handle("clear-session-memory", () => {
-      sessionManager.clear();
-      windowManager.broadcastToAllWindows("session-cleared");
+      this.clearSessionMemory();
       return { success: true };
     });
 
@@ -854,52 +881,6 @@ class ApplicationController {
       }
     });
 
-    // Detect an installed Whisper CLI across common locations.
-    ipcMain.handle("detect-whisper", async () => {
-      try {
-        const installer = this.getWhisperInstaller();
-        return await installer.detect();
-      } catch (e) {
-        logger.warn("Whisper detection failed", { error: e.message });
-        return { found: false, command: null, version: null, error: e.message };
-      }
-    });
-
-    // Install Whisper. Streams progress lines back via `webContents.send`
-    // so the renderer can paint them as they arrive.
-    ipcMain.handle("install-whisper", async (event) => {
-      try {
-        const installer = this.getWhisperInstaller();
-        const sender = event.sender;
-        const result = await installer.install({
-          onProgress: (line) => {
-            try { sender.send("install-progress", line); } catch (_) { /* ignore */ }
-          },
-        });
-        return result;
-      } catch (e) {
-        logger.error("Whisper install failed", { error: e.message });
-        return { ok: false, command: null, message: e.message, logs: "" };
-      }
-    });
-
-    // Download Whisper model. Streams progress lines back via `webContents.send`
-    ipcMain.handle("download-whisper-model", async (event, modelName) => {
-      try {
-        const installer = this.getWhisperInstaller();
-        const sender = event.sender;
-        const result = await installer.downloadModel(modelName || 'turbo', {
-          onProgress: (line) => {
-            try { sender.send("install-progress", line); } catch (_) { /* ignore */ }
-          },
-        });
-        return result;
-      } catch (e) {
-        logger.error("Whisper model download failed", { error: e.message });
-        return { ok: false, message: e.message, path: null };
-      }
-    });
-
     ipcMain.handle("save-settings", (event, settings) => {
       return this.saveSettings(settings);
     });
@@ -1030,11 +1011,31 @@ class ApplicationController {
   clearSessionMemory() {
     try {
       sessionManager.clear();
+      audioRecordingService.clear();
       windowManager.broadcastToAllWindows("session-cleared");
       logger.info("Session memory cleared via global shortcut");
     } catch (error) {
       logger.error("Error clearing session memory:", error);
     }
+  }
+
+  async handleCompletedRecording(recording, text) {
+    const transcription = String(text || '').trim();
+    if (!transcription) {
+      throw new Error('No speech was detected in this recording');
+    }
+    const audio = {
+      recordingId: recording.recordingId,
+      mimeType: recording.mimeType,
+      durationMs: recording.durationMs,
+    };
+    sessionManager.addUserInput(transcription, 'speech', { audio });
+    windowManager.broadcastToAllWindows('transcription-received', {
+      text: transcription,
+      audio,
+    });
+    const sessionHistory = sessionManager.getOptimizedHistory();
+    await this.processTranscriptionWithLLM(transcription, sessionHistory);
   }
 
   adjustOpacity(delta) {
@@ -1562,19 +1563,6 @@ class ApplicationController {
     });
   }
 
-  getWhisperInstaller() {
-    if (!this._whisperInstaller) {
-      const WhisperInstaller = require("./src/core/whisper-installer");
-      const { app } = require("electron");
-      this._whisperInstaller = new WhisperInstaller({
-        cwd: process.cwd(),
-        dataDir: app.getPath("userData"),
-        platform: process.platform,
-      });
-    }
-    return this._whisperInstaller;
-  }
-
   getSettings() {
     // Surface every value the settings UI can edit, reading the live source
     // of truth (process.env) so the UI shows exactly what the running app is
@@ -1588,19 +1576,11 @@ class ApplicationController {
       selectedIcon: this.appIcon || "terminal",
       windowGap: windowManager.windowGap,
       windowOpacity: this.windowOpacity !== undefined ? this.windowOpacity : 1.0,
+      microphoneDeviceId: this.microphoneDeviceId || 'default',
 
-      speechProvider: speechService.provider || "whisper",
-      azureKey: process.env.AZURE_SPEECH_KEY || "",
-      azureRegion: process.env.AZURE_SPEECH_REGION || "",
-      whisperCommand: process.env.WHISPER_COMMAND || "",
-      whisperModel: process.env.WHISPER_MODEL || "turbo",
-      whisperLanguage: process.env.WHISPER_LANGUAGE || "en",
-      whisperSegmentMs: process.env.WHISPER_SEGMENT_MS || "4000",
       geminiKey: process.env.GEMINI_API_KEY || "",
       groqKey: process.env.GROQ_API_KEY || "",
       llmProvider: process.env.LLM_PROVIDER || config.get('llm.provider') || 'gemini',
-
-      azureConfigured: !!process.env.AZURE_SPEECH_KEY && !!process.env.AZURE_SPEECH_REGION,
       speechAvailable: this.speechAvailable
     };
   }
@@ -1642,6 +1622,9 @@ class ApplicationController {
           this.windowOpacity = Math.min(1, Math.max(0, opacity));
           windowManager.setAllWindowsOpacity(this.windowOpacity);
         }
+      }
+      if (settings.microphoneDeviceId !== undefined) {
+        this.microphoneDeviceId = settings.microphoneDeviceId || 'default';
       }
 
       // ── Persist provider / API-key fields back to .env ──
@@ -1719,7 +1702,7 @@ class ApplicationController {
       const providerChanged = settings.speechProvider && speechService.provider !== settings.speechProvider;
       const whisperCommandChanged = settings.whisperCommand !== undefined &&
         prevWhisperCommand !== String(settings.whisperCommand || '');
-      if (providerChanged || whisperCommandChanged) {
+      if (providerChanged || whisperCommandChanged || settings.groqKey !== undefined) {
         try {
           speechService.initializeClient();
           this.speechAvailable = speechService.isAvailable
@@ -1757,6 +1740,7 @@ class ApplicationController {
         codingLanguage: this.codingLanguage,
         activeSkill: this.activeSkill,
         windowOpacity: this.windowOpacity,
+        microphoneDeviceId: this.microphoneDeviceId,
       });
 
       return { success: true, persistedEnvKeys: persistedKeys };
