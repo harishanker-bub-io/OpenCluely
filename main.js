@@ -1219,9 +1219,6 @@ class ApplicationController {
 
   async processWithLLM(text, sessionHistory) {
     try {
-      // Add user input to session memory
-      sessionManager.addUserInput(text, 'llm_input');
-
       // Check if current skill needs programming language context
       const skillsRequiringProgrammingLanguage = ['dsa', 'programming'];
       const needsProgrammingLanguage = skillsRequiringProgrammingLanguage.includes(this.activeSkill);

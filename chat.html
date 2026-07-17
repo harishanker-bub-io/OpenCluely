@@ -101,6 +101,8 @@
       .chat-messages {
         flex: 1;
         padding: 20px;
+        display: flex;
+        flex-direction: column;
         overflow-y: auto;
         overflow-x: hidden;
         -webkit-app-region: no-drag;
@@ -110,6 +112,8 @@
       .message {
         margin-bottom: 16px;
         padding: 12px 16px;
+        max-width: 82%;
+        align-self: flex-start;
         background: rgba(255, 255, 255, 0.08);
         border-radius: 8px;
         border-left: 3px solid rgba(255, 255, 255, 0.2);
@@ -123,6 +127,7 @@
         background: rgba(76, 175, 80, 0.15);
         animation: fadeInSlide 0.1s ease-out;
         position: relative;
+        min-width: 280px;
       }
 
       .message.transcription::before {
@@ -153,14 +158,27 @@
       }
       .message.system {
         background: rgba(33, 150, 243, 0.1);
+        align-self: center;
+        max-width: 90%;
+        text-align: center;
       }
       .message.error {
         background: rgba(244, 67, 54, 0.1);
+        align-self: center;
+        max-width: 90%;
       }
       .message.user {
-        background: rgba(255, 152, 0, 0.1);
+        align-self: flex-end;
+        margin-left: auto;
+        border-left: 0;
+        border-right: 3px solid #ff9800;
+        border-radius: 16px 6px 16px 16px;
+        background: rgba(255, 152, 0, 0.18);
       }
       .message.assistant {
+        align-self: flex-start;
+        margin-right: auto;
+        border-radius: 6px 16px 16px 16px;
         background: rgba(156, 39, 176, 0.1);
         border-left: 3px solid #9c27b0;
         /* Removed all height restrictions and overflow hidden */
@@ -174,15 +192,37 @@
         word-break: break-word;
         overflow-wrap: break-word;
       }
+      .message.transcription {
+        align-self: flex-end;
+        margin-left: auto;
+        border-left: 0;
+        border-right: 3px solid #4caf50;
+        border-radius: 16px 6px 16px 16px;
+        min-width: 280px;
+      }
+      .message-role {
+        margin-bottom: 4px;
+        color: rgba(255, 255, 255, 0.72);
+        font-size: 10px;
+        font-weight: 700;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }
+      .message.user .message-role,
+      .message.transcription .message-role {
+        text-align: right;
+      }
+      .voice-message audio {
+        display: block;
+        width: 100%;
+        margin: 6px 0 8px;
+      }
       
       /* Ensure all content in assistant messages is fully visible */
-      .message.assistant *,
       .message.assistant .bullet-point,
       .message.assistant .numbered-point,
       .message.assistant strong,
       .message.assistant em,
-      .message.assistant code,
-      .message.assistant pre,
       .message.assistant ul,
       .message.assistant ol,
       .message.assistant li,
@@ -266,6 +306,10 @@
         word-wrap: normal;
         margin: 0;
         position: relative;
+        max-width: 100%;
+        max-height: 320px;
+        box-sizing: border-box;
+        overflow: auto;
       }
       
       .message.assistant pre code {
@@ -283,6 +327,8 @@
         border-radius: 8px;
         border: 1px solid rgba(255, 255, 255, 0.12);
         overflow: hidden;
+        max-width: 100%;
+        min-width: 0;
       }
       
       .message.assistant .code-header {
@@ -299,8 +345,10 @@
       }
       
       .message.assistant .code-content {
-        overflow-x: auto;
+        max-height: 320px;
+        overflow: auto;
         background: rgba(0, 0, 0, 0.2);
+        min-width: 0;
       }
 
       /* Copy button in code blocks */
@@ -1067,13 +1115,6 @@
         });
       }
 
-      // Clear on session-cleared from main
-      if (whysperAPI && whysperAPI.onSessionCleared) {
-        whysperAPI.onSessionCleared(() => {
-          clearChatHistory(true);
-        });
-      }
-
       // Reload history whenever the window becomes visible (handles hidden windows and quick toggles)
       document.addEventListener('visibilitychange', () => {
         if (document.visibilityState === 'visible') {
@@ -1099,6 +1140,10 @@
         const messageDiv = document.createElement('div');
         messageDiv.className = `message ${type}`;
 
+        const roleDiv = document.createElement('div');
+        roleDiv.className = 'message-role';
+        roleDiv.textContent = ({ assistant: 'Assistant', transcription: 'You · Voice', user: 'You', system: 'Status', error: 'Error' })[type] || type;
+
         const timeDiv = document.createElement('div');
         timeDiv.className = 'message-time';
         timeDiv.textContent = new Date().toLocaleTimeString();
@@ -1114,6 +1159,7 @@
           textDiv.textContent = text;
         }
 
+        messageDiv.appendChild(roleDiv);
         messageDiv.appendChild(timeDiv);
         messageDiv.appendChild(textDiv);
 
@@ -1136,6 +1182,9 @@
         const messageDiv = document.createElement('div');
         messageDiv.className = 'message transcription voice-message';
         messageDiv.dataset.recordingId = audio.recordingId;
+        const roleDiv = document.createElement('div');
+        roleDiv.className = 'message-role';
+        roleDiv.textContent = 'You · Voice';
         const timeDiv = document.createElement('div');
         timeDiv.className = 'message-time';
         timeDiv.textContent = new Date().toLocaleTimeString();
@@ -1145,7 +1194,7 @@
         const textDiv = document.createElement('div');
         textDiv.className = 'message-text voice-transcript';
         textDiv.textContent = error ? `Transcription failed: ${error}` : (text || 'Transcribing audio…');
-        messageDiv.append(timeDiv, audioElement, textDiv);
+        messageDiv.append(roleDiv, timeDiv, audioElement, textDiv);
         chatMessages.appendChild(messageDiv);
         chatMessages.scrollTop = chatMessages.scrollHeight;
         if (!skipPersist) {
@@ -1203,6 +1252,10 @@
         thinkingDiv.className = 'message assistant thinking';
         thinkingDiv.id = 'thinking-indicator';
 
+        const roleDiv = document.createElement('div');
+        roleDiv.className = 'message-role';
+        roleDiv.textContent = 'Assistant';
+
         const timeDiv = document.createElement('div');
         timeDiv.className = 'message-time';
         timeDiv.textContent = new Date().toLocaleTimeString();
@@ -1211,6 +1264,7 @@
         textDiv.className = 'message-text thinking-dots';
         textDiv.innerHTML = '<span class="dot">•</span><span class="dot">•</span><span class="dot">•</span>';
 
+        thinkingDiv.appendChild(roleDiv);
         thinkingDiv.appendChild(timeDiv);
         thinkingDiv.appendChild(textDiv);
 

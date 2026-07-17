@@ -664,8 +664,21 @@ class SessionManager {
 
   clear() {
     const eventCount = this.sessionMemory.length;
+    clearTimeout(this._saveTimer);
+    this._saveTimer = null;
     this.sessionMemory = [];
     this.isInitialized = false;
+
+    if (this.persistenceEnabled && this.persistencePath) {
+      try {
+        fs.writeFileSync(this.persistencePath, '[]', 'utf8');
+      } catch (error) {
+        logger.warn('Failed to persist cleared session memory', {
+          error: error.message,
+          path: this.persistencePath
+        });
+      }
+    }
     
     logger.info('Session memory cleared', { eventCount });
     

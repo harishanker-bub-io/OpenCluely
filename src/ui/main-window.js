@@ -1095,14 +1095,21 @@ class MainWindowUI {
             this._mediaRecorder.addEventListener('stop', async () => {
                 const chunks = this._recordingChunks || [];
                 this._recordingChunks = [];
-                if (!chunks.length) return;
-                const blob = new Blob(chunks, { type: mimeType });
-                const result = await window.electronAPI.submitAudioRecording({
-                    bytes: await blob.arrayBuffer(),
-                    mimeType,
-                    durationMs: Math.max(0, Date.now() - this._recordingStartTime),
-                });
-                if (!result || !result.success) logger.error('Completed recording was not transcribed', { error: result && result.error });
+                try {
+                    if (!chunks.length) {
+                        logger.error('Completed recording contains no audio chunks');
+                        return;
+                    }
+                    const blob = new Blob(chunks, { type: mimeType });
+                    const result = await window.electronAPI.submitAudioRecording({
+                        bytes: await blob.arrayBuffer(),
+                        mimeType,
+                        durationMs: Math.max(0, Date.now() - this._recordingStartTime),
+                    });
+                    if (!result || !result.success) logger.error('Completed recording was not transcribed', { error: result && result.error });
+                } finally {
+                    this._releaseRendererAudioStream();
+                }
             }, { once: true });
             this._mediaRecorder.start();
             this._recordingTimeout = setTimeout(() => {
@@ -1122,7 +1129,14 @@ class MainWindowUI {
         }
         const recorder = this._mediaRecorder;
         this._mediaRecorder = null;
-        if (recorder && recorder.state !== 'inactive') recorder.stop();
+        if (recorder && recorder.state !== 'inactive') {
+            recorder.stop();
+            return;
+        }
+        this._releaseRendererAudioStream();
+    }
+
+    _releaseRendererAudioStream() {
         if (this._mediaStream) {
             this._mediaStream.getTracks().forEach((track) => track.stop());
             this._mediaStream = null;
