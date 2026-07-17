@@ -18,6 +18,10 @@ class LLMService {
   }
 
   initializeClient() {
+    this.client = null;
+    this.groqClient = null;
+    this.model = null;
+    this.isInitialized = false;
     this.provider = config.getLLMProvider();
     
     if (this.provider === 'groq') {

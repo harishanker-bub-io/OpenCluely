@@ -824,6 +824,12 @@
       let listeningStartTime = null;
       let listeningTimer = null;
       let speechAvailable = false;
+      let chatMediaRecorder = null;
+      let chatMediaStream = null;
+      let chatRecordingChunks = [];
+      let chatRecordingStartedAt = 0;
+      let chatRecordingTimeout = null;
+      let isStartingRecording = false;
 
       // Chat persistence and deduplication
       const CHAT_HISTORY_KEY = 'opencluely_chat_history_v1';
@@ -1035,7 +1041,7 @@
           applyMicVisibility();
         }
       }
-      
+
       // Listen for availability changes
       if (whysperAPI && whysperAPI.onSpeechAvailability) {
         whysperAPI.onSpeechAvailability((event, data) => {
@@ -1043,7 +1049,7 @@
           applyMicVisibility();
         });
       }
-      
+
       // Also capture generic LLM responses (from OCR/screenshot flows)
       if (whysperAPI && whysperAPI.onLlmResponse) {
         whysperAPI.onLlmResponse((event, data) => {
@@ -1353,6 +1359,98 @@
         hideListeningAnimation();
       }
 
+      async function startChatRecording() {
+        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia || !window.MediaRecorder) {
+          throw new Error('Microphone recording is not supported in this window.');
+        }
+
+        const settings = await whysperAPI.getSettings();
+        const deviceId = settings && settings.microphoneDeviceId || 'default';
+        let stream;
+        try {
+          stream = await navigator.mediaDevices.getUserMedia(
+            deviceId === 'default' ? { audio: true } : { audio: { deviceId: { exact: deviceId } } }
+          );
+        } catch (error) {
+          if (deviceId === 'default') throw error;
+          stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+          await whysperAPI.saveSettings({ microphoneDeviceId: 'default' });
+        }
+        const audioTrack = stream.getAudioTracks()[0];
+        await new Promise((resolve) => setTimeout(resolve, 350));
+        if (!stream.active || !audioTrack || audioTrack.readyState !== 'live') {
+          throw new Error('The microphone did not become ready.');
+        }
+
+        const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+          ? 'audio/webm;codecs=opus'
+          : 'audio/webm';
+        chatMediaStream = stream;
+        chatRecordingChunks = [];
+        chatRecordingStartedAt = Date.now();
+        chatMediaRecorder = new MediaRecorder(stream, { mimeType });
+        chatMediaRecorder.addEventListener('dataavailable', (event) => {
+          if (event.data && event.data.size) {
+            chatRecordingChunks.push(event.data);
+          }
+        });
+        chatMediaRecorder.addEventListener('stop', async () => {
+          const chunks = chatRecordingChunks;
+          const durationMs = Math.max(0, Date.now() - chatRecordingStartedAt);
+          chatRecordingChunks = [];
+          chatMediaRecorder = null;
+          try {
+            if (!chunks.length) throw new Error('No audio was captured.');
+            const blob = new Blob(chunks, { type: mimeType });
+            const result = await whysperAPI.submitAudioRecording({
+              bytes: await blob.arrayBuffer(),
+              mimeType,
+              durationMs,
+            });
+            if (!result || !result.success) {
+              throw new Error(result && result.error || 'Unable to transcribe audio.');
+            }
+          } catch (error) {
+            addMessage(`Audio recording failed: ${error.message}`, 'error');
+          } finally {
+            if (chatMediaStream) {
+              chatMediaStream.getTracks().forEach((track) => track.stop());
+              chatMediaStream = null;
+            }
+          }
+        }, { once: true });
+        chatMediaRecorder.start(250);
+        handleRecordingStarted();
+        addMessage('Recording started. Click the microphone again to stop.', 'system');
+        chatRecordingTimeout = setTimeout(() => {
+          if (isRecording) {
+            whysperAPI.notifyRecordingTimeout();
+            stopChatRecording();
+          }
+        }, 60 * 1000);
+      }
+
+      function stopChatRecording() {
+        if (chatRecordingTimeout) {
+          clearTimeout(chatRecordingTimeout);
+          chatRecordingTimeout = null;
+        }
+        handleRecordingStopped();
+        const recorder = chatMediaRecorder;
+        if (recorder && recorder.state !== 'inactive') {
+          addMessage('Processing audio…', 'system');
+          try {
+            recorder.requestData();
+          } catch (_) {}
+          recorder.stop();
+          return;
+        }
+        if (chatMediaStream) {
+          chatMediaStream.getTracks().forEach((track) => track.stop());
+          chatMediaStream = null;
+        }
+      }
+
       function handleTranscription(text, audio = null) {
         if (text && typeof text === 'string' && text.trim().length > 0) {
           // Hide listening animation first
@@ -1601,22 +1699,28 @@
             addMessage('Speech recognition is not configured.', 'system');
             return;
           }
+          if (isStartingRecording) {
+            addMessage('Starting microphone…', 'system');
+            return;
+          }
 
           try {
             if (isRecording) {
-              if (whysperAPI) {
-                const result = await whysperAPI.stopSpeechRecognition();
-              }
+              stopChatRecording();
             } else {
-              if (whysperAPI) {
-                const result = await whysperAPI.startSpeechRecognition();
-              }
+              isStartingRecording = true;
+              await startChatRecording();
             }
           } catch (error) {
-            addMessage("Error in recognizing speech", 'error');
+            stopChatRecording();
+            addMessage(`Unable to start microphone recording: ${error.message}`, 'error');
+          } finally {
+            isStartingRecording = false;
           }
         });
       }
+
+      window.addEventListener('beforeunload', stopChatRecording);
 
       if (sendButton) {
         sendButton.addEventListener('click', async () => {

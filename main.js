@@ -1658,12 +1658,6 @@ class ApplicationController {
       }
       if (settings.llmProvider !== undefined) {
         envUpdates.LLM_PROVIDER = settings.llmProvider;
-        // Reinitialize LLM service when provider changes
-        try {
-          llmService.initializeClient();
-        } catch (e) {
-          logger.warn('Failed to reinitialize LLM after provider change', { error: e.message });
-        }
       }
 
       // Capture the previous whisper command BEFORE persisting — persistEnvUpdates
@@ -1674,17 +1668,16 @@ class ApplicationController {
 
       const persistedKeys = this.persistEnvUpdates(envUpdates);
 
-      // If the Gemini key was just saved, reinitialize the LLM service
-      // so the new client picks up the key. Without this, the test-
-      // connection button in the onboarding wizard fails with
-      // "Service not initialized" because the client was first created
-      // at app startup, before any key was set.
-      if (settings.geminiKey !== undefined && envUpdates.GEMINI_API_KEY !== undefined) {
+      // Reinitialize only after the provider and keys are persisted, so the
+      // selected SDK client and model always come from the same provider.
+      if (settings.llmProvider !== undefined || settings.geminiKey !== undefined || settings.groqKey !== undefined) {
         try {
           llmService.initializeClient();
-          logger.info("LLM service reinitialized after Gemini key update");
+          logger.info("LLM service reinitialized after provider or key update", {
+            provider: config.getLLMProvider(),
+          });
         } catch (e) {
-          logger.warn("Failed to reinitialize LLM service after Gemini key update", {
+          logger.warn("Failed to reinitialize LLM service after provider or key update", {
             error: e.message
           });
         }
