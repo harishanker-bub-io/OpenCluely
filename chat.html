@@ -834,6 +834,7 @@
       // Chat persistence and deduplication
       const CHAT_HISTORY_KEY = 'opencluely_chat_history_v1';
       let chatHistory = [];
+      let historyLoadGeneration = 0;
       const recentResponseHashes = new Set();
       const RECENT_HASH_LIMIT = 50;
 
@@ -858,41 +859,23 @@
         }
       }
 
-      function renderHistoryItem(item) {
+      async function renderHistoryItem(item) {
         if (item.kind === 'message') {
           addMessage(item.text, item.type, true);
         } else if (item.kind === 'voice') {
-          addVoiceMessage(item.text, item.audio, true, item.error);
+          await addVoiceMessage(item.text, item.audio, true, item.error);
         } else if (item.kind === 'snippet') {
           addCodeSnippet(item.language, item.code, true);
         } else if (item.kind === 'image') {
-          loadImageFromDB(item.imageId).then(dataUrl => {
-            if (dataUrl) {
-              const msgDiv = document.createElement('div');
-              msgDiv.className = 'message user';
-              const img = document.createElement('img');
-              img.src = dataUrl;
-              img.style.maxWidth = '250px';
-              img.style.maxHeight = '150px';
-              img.style.borderRadius = '8px';
-              msgDiv.appendChild(img);
-              if (chatMessages) {
-                chatMessages.appendChild(msgDiv);
-                chatMessages.scrollTop = chatMessages.scrollHeight;
-              }
-            } else {
-              addMessage('📷 Screenshot captured', 'system', true);
-            }
-          }).catch(() => {
-            addMessage('📷 Screenshot captured', 'system', true);
-          });
+          await addScreenshotThumbnail(item.screenshotId, item.screenshotPath, true);
         }
       }
 
-      function renderLocalHistory(items) {
+      async function renderHistory(items) {
         if (!Array.isArray(items)) return;
-        chatHistory = items;
-        items.forEach(renderHistoryItem);
+        for (const item of items) {
+          await renderHistoryItem(item);
+        }
       }
 
       async function loadHistoryFromMain() {
@@ -901,7 +884,7 @@
             return false;
           }
           const history = await window.electronAPI.getFullConversationHistory();
-          if (!Array.isArray(history) || history.length === 0) {
+          if (!Array.isArray(history)) {
             return false;
           }
 
@@ -909,6 +892,18 @@
           const newChatHistory = [];
           history.forEach(event => {
             if (event.role === 'system') return;
+
+            // Screenshot events carry image metadata, not text content
+            if (event.action === 'screenshot_captured' && event.screenshot) {
+              newChatHistory.push({
+                kind: 'image',
+                screenshotId: event.screenshot.screenshotId,
+                screenshotPath: event.screenshot.screenshotPath,
+                time: event.timestamp
+              });
+              return;
+            }
+
             if (!event.content || typeof event.content !== 'string') return;
 
             if (event.role === 'model') {
@@ -949,6 +944,7 @@
       }
 
       async function loadHistory() {
+        const loadGeneration = historyLoadGeneration;
         try {
           console.log('[CHAT] Loading history...');
           if (chatMessages) {
@@ -956,32 +952,10 @@
           }
 
           const loadedFromMain = await loadHistoryFromMain();
+          if (loadGeneration !== historyLoadGeneration) return;
           if (loadedFromMain) {
-            chatHistory.forEach(renderHistoryItem);
+            await renderHistory(chatHistory);
             console.log('[CHAT] Rendered', chatHistory.length, 'items from main process');
-          }
-
-          // Always merge image items from localStorage (main process does not store images)
-          try {
-            const raw = localStorage.getItem(CHAT_HISTORY_KEY);
-            if (raw) {
-              const items = JSON.parse(raw);
-              if (Array.isArray(items)) {
-                const imageItems = items.filter(item => item.kind === 'image');
-                const existingImageIds = new Set(chatHistory.filter(i => i.kind === 'image').map(i => i.imageId));
-                imageItems.forEach(item => {
-                  if (!existingImageIds.has(item.imageId)) {
-                    chatHistory.push(item);
-                    renderHistoryItem(item);
-                  }
-                });
-                if (imageItems.length > 0) {
-                  saveHistory();
-                }
-              }
-            }
-          } catch (e) {
-            console.warn('[CHAT] Failed to merge local image history', e);
           }
 
           if (!loadedFromMain) {
@@ -992,7 +966,8 @@
               return;
             }
             const items = JSON.parse(raw);
-            renderLocalHistory(items);
+            chatHistory = items;
+            await renderHistory(items);
             console.log('[CHAT] Rendered', items.length, 'items from localStorage');
           }
         } catch (e) {
@@ -1005,23 +980,24 @@
           const ok = confirm('Clear chat history?');
           if (!ok) return;
         }
+        historyLoadGeneration += 1;
         chatHistory = [];
-        saveHistory();
+        localStorage.removeItem(CHAT_HISTORY_KEY);
         if (!skipMainClear && window.electronAPI && window.electronAPI.clearSessionMemory) {
           window.electronAPI.clearSessionMemory().catch(error => console.warn('Failed to clear persisted audio', error));
         }
         // Clear DOM
         if (chatMessages) chatMessages.innerHTML = '';
         // Clear IndexedDB images too
-        if (imageDB) {
+        openImageDB().then((db) => {
           try {
-            const tx = imageDB.transaction('screenshots', 'readwrite');
+            const tx = db.transaction('screenshots', 'readwrite');
             tx.objectStore('screenshots').clear();
             tx.onerror = () => console.warn('Failed to clear IndexedDB images');
           } catch (e) {
             console.warn('IndexedDB clear error:', e);
           }
-        }
+        }).catch(() => {});
       }
 
       function applyMicVisibility() {
@@ -1090,17 +1066,62 @@
         });
       }
 
+      // Render a screenshot thumbnail by loading from the main-process file store.
+      // Falls back to IndexedDB for legacy entries that still use imageId.
+      async function addScreenshotThumbnail(screenshotId, screenshotPath, skipPersist) {
+        let dataUrl = null;
+
+        // Primary path: load from main-process disk store (survives restart)
+        if (screenshotPath && window.electronAPI && window.electronAPI.loadScreenshotFile) {
+          try {
+            const result = await window.electronAPI.loadScreenshotFile(screenshotPath);
+            if (result && result.success && result.dataUrl) {
+              dataUrl = result.dataUrl;
+            }
+          } catch (_) {}
+        }
+
+        // Fallback: legacy IndexedDB entry (pre-migration)
+        if (!dataUrl && screenshotId) {
+          try {
+            dataUrl = await loadImageFromDB(screenshotId);
+          } catch (_) {}
+        }
+
+        if (dataUrl) {
+          const msgDiv = document.createElement('div');
+          msgDiv.className = 'message user';
+          const img = document.createElement('img');
+          img.src = dataUrl;
+          img.style.maxWidth = '250px';
+          img.style.maxHeight = '150px';
+          img.style.borderRadius = '8px';
+          msgDiv.appendChild(img);
+          if (chatMessages) {
+            chatMessages.appendChild(msgDiv);
+            chatMessages.scrollTop = chatMessages.scrollHeight;
+          }
+        } else {
+          addMessage('📷 Screenshot captured', 'system', true);
+        }
+
+        if (!skipPersist) {
+          chatHistory.push({ kind: 'image', screenshotId, screenshotPath, time: new Date().toISOString() });
+          saveHistory();
+        }
+      }
+
       // Display captured screenshot image in chat
       if (whysperAPI && whysperAPI.onScreenshotCaptured) {
         whysperAPI.onScreenshotCaptured((event, data) => {
           if (data && data.imageData) {
-            const imageId = 'img-' + Date.now();
+            const screenshotId = data.screenshotId || ('img-' + Date.now());
             // Show image thumbnail in chat
             const msgDiv = document.createElement('div');
             msgDiv.className = 'message user';
             const img = document.createElement('img');
             img.src = data.imageData;
-            img.dataset.imageId = imageId;
+            img.dataset.imageId = screenshotId;
             img.style.maxWidth = '250px';
             img.style.maxHeight = '150px';
             img.style.borderRadius = '8px';
@@ -1109,11 +1130,13 @@
               chatMessages.appendChild(msgDiv);
               chatMessages.scrollTop = chatMessages.scrollHeight;
             }
-            // Persist to IndexedDB + chat history
-            saveImageToDB(imageId, data.imageData).catch(() => {});
+            // Cache to IndexedDB for fast hot-reload (best-effort);
+            // the durable record is the session event + disk file.
+            saveImageToDB(screenshotId, data.imageData).catch(() => {});
             chatHistory.push({
               kind: 'image',
-              imageId: imageId,
+              screenshotId: screenshotId,
+              screenshotPath: data.screenshotPath || null,
               time: new Date().toISOString()
             });
             saveHistory();

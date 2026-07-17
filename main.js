@@ -499,6 +499,14 @@ class ApplicationController {
     ipcMain.handle("submit-audio-recording", async (_event, payload) => {
       let recording = null;
       try {
+        const byteLength = payload && payload.bytes
+          ? (payload.bytes.byteLength || payload.bytes.length || 0)
+          : 0;
+        logger.info("Audio recording received from renderer", {
+          byteLength,
+          mimeType: payload && payload.mimeType,
+          durationMs: payload && payload.durationMs,
+        });
         recording = audioRecordingService.save(
           payload && payload.bytes,
           payload && payload.mimeType,
@@ -692,6 +700,25 @@ class ApplicationController {
     ipcMain.handle("clear-session-memory", () => {
       this.clearSessionMemory();
       return { success: true };
+    });
+
+    // Load a screenshot PNG from disk and return it as a data URL.
+    // This lets the chat window restore screenshot thumbnails after restart
+    // without storing large base64 blobs in session-memory.json.
+    ipcMain.handle("load-screenshot-file", (_event, screenshotPath) => {
+      try {
+        const fs = require('fs');
+        if (!screenshotPath || !fs.existsSync(screenshotPath)) {
+          return { success: false, error: 'Screenshot file not found' };
+        }
+        const buffer = fs.readFileSync(screenshotPath);
+        const ext = screenshotPath.split('.').pop().toLowerCase();
+        const mimeType = ext === 'png' ? 'image/png' : ext === 'jpg' || ext === 'jpeg' ? 'image/jpeg' : 'image/png';
+        const base64 = buffer.toString('base64');
+        return { success: true, dataUrl: `data:${mimeType};base64,${base64}` };
+      } catch (error) {
+        return { success: false, error: error.message };
+      }
     });
 
     ipcMain.handle("force-always-on-top", () => {
@@ -1012,6 +1039,12 @@ class ApplicationController {
     try {
       sessionManager.clear();
       audioRecordingService.clear();
+      const screenshotsDir = path.join(config.get('app.dataDir'), 'screenshots');
+      try {
+        fs.rmSync(screenshotsDir, { recursive: true, force: true });
+      } catch (error) {
+        logger.warn('Failed to clear persisted screenshots', { error: error.message, screenshotsDir });
+      }
       windowManager.broadcastToAllWindows("session-cleared");
       logger.info("Session memory cleared via global shortcut");
     } catch (error) {
@@ -1153,13 +1186,41 @@ class ApplicationController {
         return;
       }
 
+      // Persist screenshot PNG to disk so thumbnails survive restarts.
+      const fs = require('fs');
+      const screenshotsDir = path.join(config.get('app.dataDir'), 'screenshots');
+      if (!fs.existsSync(screenshotsDir)) {
+        fs.mkdirSync(screenshotsDir, { recursive: true });
+      }
+      const screenshotId = `ss-${Date.now()}-${Math.random().toString(36).substr(2, 6)}`;
+      const screenshotFileName = `${screenshotId}.png`;
+      const screenshotPath = path.join(screenshotsDir, screenshotFileName);
+      fs.writeFileSync(screenshotPath, capture.imageBuffer);
+
+      // Add a user-facing session event so the screenshot record persists
+      // in session-memory.json and the chat can restore the thumbnail.
+      sessionManager.addConversationEvent({
+        role: 'user',
+        content: 'Screenshot captured',
+        action: 'screenshot_captured',
+        metadata: {
+          screenshotId,
+          screenshotPath,
+          screenshotMimeType: capture.mimeType || 'image/png',
+          screenshotSize: capture.imageBuffer.length,
+          screenshotDimensions: capture.metadata && capture.metadata.dimensions
+        }
+      });
+
       // Send the captured image to the chat window so the user can see
       // what was captured alongside the AI response.
       const imageBase64 = Buffer.from(capture.imageBuffer).toString('base64');
       const imageDataUrl = `data:${capture.mimeType || 'image/png'};base64,${imageBase64}`;
-      logger.info('Broadcasting screenshot to chat', { size: capture.imageBuffer.length });
+      logger.info('Broadcasting screenshot to chat', { size: capture.imageBuffer.length, screenshotId });
       windowManager.broadcastToAllWindows("screenshot-captured", {
         imageData: imageDataUrl,
+        screenshotId,
+        screenshotPath,
         timestamp: Date.now()
       });
 

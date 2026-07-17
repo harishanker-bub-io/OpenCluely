@@ -301,7 +301,14 @@ class SessionManager {
       skill: event.skill,
       action: event.action,
       audio: event.metadata && event.metadata.audio ? event.metadata.audio : null,
-      audioError: event.metadata && event.metadata.audioError ? event.metadata.audioError : null
+      audioError: event.metadata && event.metadata.audioError ? event.metadata.audioError : null,
+      screenshot: event.metadata && event.metadata.screenshotId ? {
+        screenshotId: event.metadata.screenshotId,
+        screenshotPath: event.metadata.screenshotPath,
+        screenshotMimeType: event.metadata.screenshotMimeType || 'image/png',
+        screenshotSize: event.metadata.screenshotSize,
+        screenshotDimensions: event.metadata.screenshotDimensions
+      } : null
     }));
   }
 
