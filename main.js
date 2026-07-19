@@ -1284,6 +1284,14 @@ class ApplicationController {
       const skillsRequiringProgrammingLanguage = ['dsa', 'programming'];
       const needsProgrammingLanguage = skillsRequiringProgrammingLanguage.includes(this.activeSkill);
 
+      logger.info('LLM processing started', {
+        provider: llmService.provider,
+        model: llmService.model,
+        skill: this.activeSkill,
+        userInput: (text || '').substring(0, 200),
+        programmingLanguage: needsProgrammingLanguage ? this.codingLanguage : 'not applicable'
+      });
+
       this._responseSeq = (this._responseSeq || 0) + 1;
       const messageId = `chat-${Date.now()}-${this._responseSeq}`;
       windowManager.broadcastToAllWindows("transcription-llm-response-start", {
@@ -1305,6 +1313,9 @@ class ApplicationController {
       llmResult.metadata = { ...llmResult.metadata, messageId };
 
       logger.info("LLM processing completed, showing response", {
+        provider: llmService.provider,
+        model: llmService.model,
+        userInput: (text || '').substring(0, 200),
         responseLength: llmResult.response.length,
         skill: this.activeSkill,
         programmingLanguage: needsProgrammingLanguage ? this.codingLanguage : 'not applicable',
@@ -1472,6 +1483,9 @@ class ApplicationController {
       this.broadcastTranscriptionLLMResponse(llmResult);
 
       logger.info("Transcription LLM response completed", {
+        provider: llmService.provider,
+        model: llmService.model,
+        userInput: (cleanText || '').substring(0, 200),
         responseLength: llmResult.response.length,
         skill: this.activeSkill,
         programmingLanguage: needsProgrammingLanguage ? this.codingLanguage : 'not applicable',
@@ -1574,10 +1588,11 @@ class ApplicationController {
       isTranscriptionResponse: true
     };
 
-    logger.info("Broadcasting transcription LLM response to all windows", {
+    // All callers already log the outcome at info level with richer context
+    // (skill, programmingLanguage, processingTime, fallback reason, etc.).
+    logger.debug("Broadcasting transcription LLM response to all windows", {
       responseLength: llmResult.response.length,
-      skill: this.activeSkill,
-      responsePreview: llmResult.response.substring(0, 100) + "..."
+      skill: this.activeSkill
     });
 
     windowManager.broadcastToAllWindows("transcription-llm-response", broadcastData);

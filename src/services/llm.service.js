@@ -227,7 +227,8 @@ class LLMService {
         }
       }
 
-      // Enforce language in code fences if provided
+      // Strip reasoning tags then enforce language in code fences
+      responseText = this._stripThinkingTags(responseText);
       const finalResponse = programmingLanguage
         ? this.enforceProgrammingLanguage(responseText, programmingLanguage)
         : responseText;
@@ -279,6 +280,14 @@ class LLMService {
     const startTime = Date.now();
     this.requestCount++;
 
+    logger.info('LLM image streaming started', {
+      provider: this.provider,
+      model: this.model,
+      activeSkill,
+      imageSize: imageBuffer.length,
+      requestId: this.requestCount
+    });
+
     try {
       let fullText;
       
@@ -311,11 +320,14 @@ class LLMService {
         });
       }
 
+      fullText = this._stripThinkingTags(fullText);
       const finalResponse = programmingLanguage
         ? this.enforceProgrammingLanguage(fullText, programmingLanguage)
         : fullText;
 
       logger.logPerformance('LLM image streaming', startTime, {
+        provider: this.provider,
+        model: this.model,
         activeSkill,
         imageSize: imageBuffer.length,
         responseLength: finalResponse.length,
@@ -396,7 +408,8 @@ class LLMService {
         }
       }
       
-      // Enforce language in code fences if programmingLanguage specified
+      // Strip reasoning tags then enforce language in code fences
+      response = this._stripThinkingTags(response);
       const finalResponse = programmingLanguage
         ? this.enforceProgrammingLanguage(response, programmingLanguage)
         : response;
@@ -444,6 +457,14 @@ class LLMService {
     const startTime = Date.now();
     this.requestCount++;
 
+    logger.info('LLM text streaming started', {
+      provider: this.provider,
+      model: this.model,
+      activeSkill,
+      textPreview: (text || '').substring(0, 120),
+      requestId: this.requestCount
+    });
+
     try {
       let fullText;
       
@@ -458,13 +479,17 @@ class LLMService {
         });
       }
 
+      fullText = this._stripThinkingTags(fullText);
       const finalResponse = programmingLanguage
         ? this.enforceProgrammingLanguage(fullText, programmingLanguage)
         : fullText;
 
       logger.logPerformance('LLM text streaming', startTime, {
+        provider: this.provider,
+        model: this.model,
         activeSkill,
-        textLength: text.length,
+        textPreview: (text || '').substring(0, 120),
+        textLength: (text || '').length,
         responseLength: finalResponse.length,
         requestId: this.requestCount
       });
@@ -536,7 +561,8 @@ class LLMService {
         }
       }
       
-      // Enforce language in code fences if programmingLanguage specified
+      // Strip reasoning tags then enforce language in code fences
+      response = this._stripThinkingTags(response);
       const finalResponse = programmingLanguage
         ? this.enforceProgrammingLanguage(response, programmingLanguage)
         : response;
@@ -1001,6 +1027,14 @@ The user is speaking in ${activeSkill.toUpperCase()} mode. Treat each transcript
     const startTime = Date.now();
     this.requestCount++;
 
+    logger.info('LLM transcription streaming started', {
+      provider: this.provider,
+      model: this.model,
+      activeSkill,
+      textPreview: (text || '').substring(0, 120),
+      requestId: this.requestCount
+    });
+
     try {
       const geminiRequest = this.buildIntelligentTranscriptionRequest(text, activeSkill, sessionMemory, programmingLanguage);
 
@@ -1010,13 +1044,17 @@ The user is speaking in ${activeSkill.toUpperCase()} mode. Treat each transcript
         }
       });
 
+      fullText = this._stripThinkingTags(fullText);
       const finalResponse = programmingLanguage
         ? this.enforceProgrammingLanguage(fullText, programmingLanguage)
         : fullText;
 
       logger.logPerformance('LLM transcription streaming', startTime, {
+        provider: this.provider,
+        model: this.model,
         activeSkill,
-        textLength: text.length,
+        textPreview: (text || '').substring(0, 120),
+        textLength: (text || '').length,
         responseLength: finalResponse.length,
         requestId: this.requestCount
       });
@@ -1061,6 +1099,17 @@ The user is speaking in ${activeSkill.toUpperCase()} mode. Treat each transcript
     } catch (_) {
       return '';
     }
+  }
+
+  /** Strip reasoning tags (&lt;think&gt;…&lt;/think&gt;) that some models (e.g. Qwen)
+   *  emit alongside the actual response. Called on the accumulated full text
+   *  before it is returned to the caller or logged. */
+  _stripThinkingTags(text) {
+    if (!text || typeof text !== 'string') return text || '';
+    return text
+      .replace(/<think\b[^>]*>[\s\S]*?<\/think>\s*/gi, '')
+      .replace(/<thinking\b[^>]*>[\s\S]*?<\/thinking>\s*/gi, '')
+      .trim();
   }
 
   /**

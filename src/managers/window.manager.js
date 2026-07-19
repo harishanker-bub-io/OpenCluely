@@ -1287,15 +1287,25 @@ class WindowManager {
       }
     });
     
-    logger.info('Broadcast sent to all windows', { 
-      channel, 
-      windowCount: this.windows.size,
-      windowStates,
-      dataKeys: data ? Object.keys(data) : [],
-      // Fixed: Check for 'content' instead of 'response' to match actual data structure
-      dataPreview: data && data.content ? data.content.substring(0, 50) + '...' : 
-                   data && data.response ? data.response.substring(0, 50) + '...' : 'No response'
-    });
+    // Skip high-frequency / redundant channels. Chunk/start fire hundreds of
+    // times per response; the final response channel is already logged (with
+    // richer context) by broadcastTranscriptionLLMResponse in main.js.
+    const isHighFrequency =
+      channel === 'transcription-llm-response-chunk' ||
+      channel === 'transcription-llm-response-start' ||
+      channel === 'transcription-llm-response';
+
+    if (!isHighFrequency) {
+      logger.info('Broadcast sent to all windows', { 
+        channel, 
+        windowCount: this.windows.size,
+        windowStates,
+        dataKeys: data ? Object.keys(data) : [],
+        // Fixed: Check for 'content' instead of 'response' to match actual data structure
+        dataPreview: data && data.content ? data.content.substring(0, 50) + '...' : 
+                     data && data.response ? data.response.substring(0, 50) + '...' : 'No response'
+      });
+    }
   }
 
   getWindow(type) {

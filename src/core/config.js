@@ -72,9 +72,9 @@ class ConfigManager {
         provider: 'groq',
         assemblyai: {
           model: 'universal-3-5-pro',
-          languageDetection: true,
-          pollIntervalMs: 3000,
-          timeoutMs: 60000
+          languageCode: 'en',
+          pollIntervalMs: 1000,
+          timeoutMs: 120000
         },
         groq: {
           model: 'whisper-large-v3-turbo'

@@ -11,16 +11,19 @@ const TIMEOUT_MS = config.get('speech.assemblyai.timeoutMs') || 60000;
  */
 async function uploadAudio(filePath, apiKey) {
   const stats = fs.statSync(filePath);
-  const audioData = fs.readFileSync(filePath);
   logger.info('Uploading audio to AssemblyAI', { filePath, bytes: stats.size });
 
+  // Stream the file instead of buffering it entirely in memory (much faster for large files)
+  const fileStream = fs.createReadStream(filePath);
   const response = await fetch(`${BASE_URL}/v2/upload`, {
     method: 'POST',
     headers: {
       'authorization': apiKey,
       'content-type': 'application/octet-stream',
+      'transfer-encoding': 'chunked',
     },
-    body: audioData,
+    body: fileStream,
+    duplex: 'half',
   });
 
   const result = await response.json();
@@ -41,6 +44,7 @@ async function transcribe(filePath) {
   }
 
   const model = config.get('speech.assemblyai.model') || 'best';
+  const languageCode = config.get('speech.assemblyai.languageCode') || 'en';
   const startTime = Date.now();
 
   // Step 1: Upload audio
@@ -57,7 +61,7 @@ async function transcribe(filePath) {
     body: JSON.stringify({
       audio_url: audioUrl,
       speech_models: [model],
-      language_detection: true,
+      language_code: languageCode,
     }),
   });
 
