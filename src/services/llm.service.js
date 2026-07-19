@@ -8,6 +8,7 @@ class LLMService {
   constructor() {
     this.client = null;
     this.groqClient = null;
+    this.cerebrasApiKey = null;
     this.model = null;
     this.provider = 'gemini';
     this.isInitialized = false;
@@ -20,12 +21,15 @@ class LLMService {
   initializeClient() {
     this.client = null;
     this.groqClient = null;
+    this.cerebrasApiKey = null;
     this.model = null;
     this.isInitialized = false;
     this.provider = config.getLLMProvider();
     
     if (this.provider === 'groq') {
       this._initializeGroqClient();
+    } else if (this.provider === 'cerebras') {
+      this._initializeCerebrasClient();
     } else {
       this._initializeGeminiClient();
     }
@@ -79,6 +83,40 @@ class LLMService {
       });
     } catch (error) {
       logger.error('Failed to initialize Groq client', {
+        error: error.message
+      });
+    }
+  }
+
+  _initializeCerebrasClient() {
+    const apiKey = config.getApiKey('CEREBRAS');
+    const cfgModel = config.get('llm.cerebras.model');
+
+    logger.debug('Cerebras init attempt', {
+      hasApiKey: !!apiKey,
+      apiKeyPrefix: apiKey ? apiKey.substring(0, 8) + '...' : 'none',
+      cfgModel,
+      envProvider: process.env.LLM_PROVIDER
+    });
+
+    if (!apiKey || apiKey === 'your_cerebras_api_key_here') {
+      logger.warn('Cerebras API key not configured', {
+        keyExists: !!apiKey
+      });
+      return;
+    }
+
+    try {
+      this.cerebrasApiKey = apiKey;
+      this.model = cfgModel;
+      this.isInitialized = true;
+      this.provider = 'cerebras';
+
+      logger.info('Cerebras AI client initialized successfully', {
+        model: this.model
+      });
+    } catch (error) {
+      logger.error('Failed to initialize Cerebras client', {
         error: error.message
       });
     }
@@ -470,6 +508,8 @@ class LLMService {
       
       if (this.provider === 'groq') {
         fullText = await this._executeGroqStream(text, activeSkill, sessionMemory, programmingLanguage, onDelta);
+      } else if (this.provider === 'cerebras') {
+        fullText = await this._executeCerebrasStream(text, activeSkill, sessionMemory, programmingLanguage, onDelta);
       } else {
         const geminiRequest = this.buildGeminiRequest(text, activeSkill, sessionMemory, programmingLanguage);
         fullText = await this.executeStreamingRequest(geminiRequest, (delta) => {
@@ -1038,11 +1078,16 @@ The user is speaking in ${activeSkill.toUpperCase()} mode. Treat each transcript
     try {
       const geminiRequest = this.buildIntelligentTranscriptionRequest(text, activeSkill, sessionMemory, programmingLanguage);
 
-      const fullText = await this.executeStreamingRequest(geminiRequest, (delta) => {
-        if (typeof onDelta === 'function' && delta) {
-          onDelta(delta);
-        }
-      });
+      let fullText;
+      if (this.provider === 'cerebras') {
+        fullText = await this._executeCerebrasStream(text, activeSkill, sessionMemory, programmingLanguage, onDelta);
+      } else {
+        fullText = await this.executeStreamingRequest(geminiRequest, (delta) => {
+          if (typeof onDelta === 'function' && delta) {
+            onDelta(delta);
+          }
+        });
+      }
 
       fullText = this._stripThinkingTags(fullText);
       const finalResponse = programmingLanguage
@@ -1382,6 +1427,89 @@ The user is speaking in ${activeSkill.toUpperCase()} mode. Treat each transcript
     }
 
     return fullText.trim();
+  }
+
+  // ── Cerebras (OpenAI-compatible) methods ──
+
+  _buildCerebrasMessages(text, activeSkill, sessionMemory, programmingLanguage) {
+    return this._buildGroqMessages(text, activeSkill, sessionMemory, programmingLanguage);
+  }
+
+  _executeCerebrasStream(text, activeSkill, sessionMemory, programmingLanguage, onDelta) {
+    const https = require('https');
+    const messages = this._buildCerebrasMessages(text, activeSkill, sessionMemory, programmingLanguage);
+    const genConfig = config.get('llm.cerebras.generation') || {};
+    const timeout = config.get('llm.cerebras.timeout') || 120000;
+
+    const postData = JSON.stringify({
+      model: this.model,
+      messages,
+      temperature: genConfig.temperature || 0.6,
+      max_tokens: genConfig.maxTokens || 65000,
+      top_p: genConfig.topP || 0.95,
+      stream: true
+    });
+
+    const options = {
+      method: 'POST',
+      hostname: 'api.cerebras.ai',
+      path: '/v1/chat/completions',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${this.cerebrasApiKey}`,
+        'Content-Length': Buffer.byteLength(postData)
+      },
+      timeout
+    };
+
+    return new Promise((resolve, reject) => {
+      const req = https.request(options, (res) => {
+        if (res.statusCode !== 200) {
+          let errBody = '';
+          res.on('data', (c) => { errBody += c; });
+          res.on('end', () => reject(new Error(`Cerebras HTTP ${res.statusCode}: ${errBody}`)));
+          return;
+        }
+
+        let fullText = '';
+        let buffer = '';
+
+        res.setEncoding('utf8');
+        res.on('data', (chunk) => {
+          buffer += chunk;
+          let idx;
+          while ((idx = buffer.indexOf('\n')) !== -1) {
+            const line = buffer.slice(0, idx).trim();
+            buffer = buffer.slice(idx + 1);
+            if (!line.startsWith('data:')) continue;
+            const payload = line.slice(5).trim();
+            if (!payload || payload === '[DONE]') continue;
+            try {
+              const json = JSON.parse(payload);
+              const content = json.choices?.[0]?.delta?.content;
+              if (content) {
+                fullText += content;
+                if (typeof onDelta === 'function') {
+                  onDelta(content);
+                }
+              }
+            } catch (_) { /* skip partial JSON */ }
+          }
+        });
+
+        res.on('end', () => resolve(fullText.trim()));
+        res.on('error', (error) => reject(new Error(`Cerebras streaming error: ${error.message}`)));
+      });
+
+      req.on('error', (error) => reject(new Error(`Cerebras request failed: ${error.message}`)));
+      req.on('timeout', () => {
+        req.destroy();
+        reject(new Error('Cerebras request timeout'));
+      });
+
+      req.write(postData);
+      req.end();
+    });
   }
 
   async performPreflightCheck() {

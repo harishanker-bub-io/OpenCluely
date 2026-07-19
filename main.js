@@ -1653,6 +1653,7 @@ class ApplicationController {
 
       geminiKey: process.env.GEMINI_API_KEY || "",
       groqKey: process.env.GROQ_API_KEY || "",
+      cerebrasKey: process.env.CEREBRAS_API_KEY || "",
       assemblyaiKey: process.env.ASSEMBLYAI_API_KEY || "",
       speechProvider: process.env.SPEECH_PROVIDER || 'groq',
       llmProvider: process.env.LLM_PROVIDER || config.get('llm.provider') || 'gemini',
@@ -1719,6 +1720,9 @@ class ApplicationController {
       if (settings.groqKey !== undefined) {
         envUpdates.GROQ_API_KEY = settings.groqKey;
       }
+      if (settings.cerebrasKey !== undefined) {
+        envUpdates.CEREBRAS_API_KEY = settings.cerebrasKey;
+      }
       if (settings.llmProvider !== undefined) {
         envUpdates.LLM_PROVIDER = settings.llmProvider;
       }
@@ -1730,7 +1734,7 @@ class ApplicationController {
 
       // Reinitialize only after the provider and keys are persisted, so the
       // selected SDK client and model always come from the same provider.
-      if (settings.llmProvider !== undefined || settings.geminiKey !== undefined || settings.groqKey !== undefined) {
+      if (settings.llmProvider !== undefined || settings.geminiKey !== undefined || settings.groqKey !== undefined || settings.cerebrasKey !== undefined) {
         try {
           llmService.initializeClient();
           logger.info("LLM service reinitialized after provider or key update", {

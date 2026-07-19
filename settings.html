@@ -427,6 +427,7 @@
                         <select class="input-field" id="llmProvider">
                             <option value="gemini">Google Gemini</option>
                             <option value="groq">Groq (Qwen 3.6)</option>
+                            <option value="cerebras">Cerebras (Zai GLM 4.7)</option>
                         </select>
                     </div>
                     <div id="geminiFields" class="settings-group">
@@ -445,6 +446,15 @@
                                 <div class="settings-item-description">Your Groq API key from console.groq.com</div>
                             </div>
                             <input type="password" class="input-field" id="groqKey" placeholder="gsk_...">
+                        </div>
+                    </div>
+                    <div id="cerebrasFields" class="settings-group" style="display:none;">
+                        <div class="settings-item">
+                            <div>
+                                <div class="settings-item-label">Cerebras API Key</div>
+                                <div class="settings-item-description">Your Cerebras API key from cloud.cerebras.ai</div>
+                            </div>
+                            <input type="password" class="input-field" id="cerebrasKey" placeholder="csk_...">
                         </div>
                     </div>
                 </div>

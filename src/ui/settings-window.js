@@ -10,6 +10,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const assemblyaiKeyInput = document.getElementById('assemblyaiKey');
     const geminiKeyInput = document.getElementById('geminiKey');
     const groqKeyInput = document.getElementById('groqKey');
+    const cerebrasKeyInput = document.getElementById('cerebrasKey');
     const groqSpeechKeyInput = document.getElementById('groqSpeechKey');
     const llmProviderSelect = document.getElementById('llmProvider');
     const windowGapInput = document.getElementById('windowGap');
@@ -181,6 +182,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (assemblyaiKeyInput) assemblyaiKeyInput.value = settings.assemblyaiKey || '';
         if (geminiKeyInput) geminiKeyInput.value = settings.geminiKey || '';
         if (groqKeyInput) groqKeyInput.value = settings.groqKey || '';
+        if (cerebrasKeyInput) cerebrasKeyInput.value = settings.cerebrasKey || '';
         if (groqSpeechKeyInput) groqSpeechKeyInput.value = settings.groqKey || '';
         if (llmProviderSelect) llmProviderSelect.value = settings.llmProvider || 'gemini';
         if (windowGapInput) windowGapInput.value = settings.windowGap || '';
@@ -243,6 +245,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (assemblyaiKeyInput) settings.assemblyaiKey = assemblyaiKeyInput.value;
         if (geminiKeyInput) settings.geminiKey = geminiKeyInput.value;
         if (groqKeyInput) settings.groqKey = groqKeyInput.value;
+        if (cerebrasKeyInput) settings.cerebrasKey = cerebrasKeyInput.value;
         if (groqSpeechKeyInput) settings.groqKey = groqSpeechKeyInput.value;
         if (llmProviderSelect) settings.llmProvider = llmProviderSelect.value;
         if (windowGapInput) settings.windowGap = windowGapInput.value;
@@ -274,6 +277,7 @@ document.addEventListener('DOMContentLoaded', () => {
         assemblyaiKeyInput,
         geminiKeyInput,
         groqKeyInput,
+        cerebrasKeyInput,
         groqSpeechKeyInput,
         windowGapInput,
         resumeInput
@@ -360,8 +364,10 @@ document.addEventListener('DOMContentLoaded', () => {
         const provider = llmProviderSelect ? llmProviderSelect.value : 'gemini';
         const geminiGroup = document.getElementById('geminiFields');
         const groqGroup = document.getElementById('groqFields');
+        const cerebrasGroup = document.getElementById('cerebrasFields');
         if (geminiGroup) geminiGroup.style.display = provider === 'gemini' ? '' : 'none';
         if (groqGroup) groqGroup.style.display = provider === 'groq' ? '' : 'none';
+        if (cerebrasGroup) cerebrasGroup.style.display = provider === 'cerebras' ? '' : 'none';
     };
 
     if (llmProviderSelect) {

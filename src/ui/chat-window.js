@@ -142,6 +142,13 @@ class ChatWindowUI {
             });
             
             window.electronAPI.onLlmError((event, data) => {
+                // Clear any stuck streaming bubble or thinking indicator so
+                // the UI doesn't stay frozen on "loading…" after a failure.
+                this.hideThinkingIndicator();
+                this._streamBuffers = {};
+                const stuck = this.elements.chatMessages &&
+                    this.elements.chatMessages.querySelectorAll('[data-stream-id]');
+                if (stuck) stuck.forEach(el => el.remove());
                 this.addMessage(`LLM Error: ${data.error}`, 'error');
             });
             

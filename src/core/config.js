@@ -65,6 +65,16 @@ class ConfigManager {
             topP: 0.95,
             maxTokens: 4096
           }
+        },
+        cerebras: {
+          model: 'zai-glm-4.7',
+          maxRetries: 3,
+          timeout: 120000,
+          generation: {
+            temperature: 0.6,
+            topP: 0.95,
+            maxTokens: 65000
+          }
         }
       },
 
