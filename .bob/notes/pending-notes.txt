@@ -1,5 +1,0 @@
-{"id":"0ef53693-f84f-496e-8c3a-5aa203c0aa71","ts":"2026-07-19T07:07:32.548Z","path":"C:\\Users\\yashs\\OpenCluely\\src\\ui\\chat-window.js","version":"1.0.0","taskID":"11a24a0a-38e2-4dea-9a0b-62235969fce9"}
-{"id":"05585d2e-7e32-448f-8a3c-fa2e87af63e0","ts":"2026-07-19T07:11:48.228Z","path":"C:\\Users\\yashs\\OpenCluely\\src\\ui\\chat-window.js","version":"1.0.0","taskID":"11a24a0a-38e2-4dea-9a0b-62235969fce9"}
-{"id":"a370ff1e-7113-4db8-9640-a71506d4b937","ts":"2026-07-19T07:12:28.447Z","path":"C:\\Users\\yashs\\OpenCluely\\src\\ui\\chat-window.js","version":"1.0.0","taskID":"11a24a0a-38e2-4dea-9a0b-62235969fce9"}
-{"id":"56618a53-3e82-46f1-9977-b3ec308ff1d3","ts":"2026-07-19T07:19:07.059Z","path":"C:\\Users\\yashs\\OpenCluely\\settings.html","version":"1.0.0","taskID":"11a24a0a-38e2-4dea-9a0b-62235969fce9"}
-{"id":"43939aa9-03c4-4ff1-929b-69369b4e481b","ts":"2026-07-19T07:23:15.187Z","path":"C:\\Users\\yashs\\OpenCluely\\chat.html","version":"1.0.0","taskID":"11a24a0a-38e2-4dea-9a0b-62235969fce9"}
