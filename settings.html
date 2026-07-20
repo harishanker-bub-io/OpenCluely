@@ -67,9 +67,9 @@
         .settings-content {
             flex: 1;
             padding: 20px;
+            padding-bottom: 40px;
             overflow-y: auto;
             color: rgba(255, 255, 255, 0.9);
-            max-height: calc(100vh - 70px);
         }
 
         .settings-section {
@@ -372,34 +372,6 @@
                         </div>
                         <select class="input-field" id="microphoneDevice"></select>
                     </div>
-                    <div class="settings-item">
-                        <div>
-                            <div class="settings-item-label">Speech-to-text provider</div>
-                            <div class="settings-item-description">Groq (Whisper) or AssemblyAI for transcription</div>
-                        </div>
-                        <select class="input-field" id="speechProvider">
-                            <option value="groq">Groq (Whisper)</option>
-                            <option value="assemblyai">AssemblyAI</option>
-                        </select>
-                    </div>
-                    <div id="groqSpeechFields">
-                        <div class="settings-item">
-                            <div>
-                                <div class="settings-item-label">Groq API key</div>
-                                <div class="settings-item-description">Get your key from console.groq.com</div>
-                            </div>
-                            <input type="password" class="input-field" id="groqSpeechKey" placeholder="gsk_…">
-                        </div>
-                    </div>
-                    <div id="assemblyaiSpeechFields" style="display:none;">
-                        <div class="settings-item">
-                            <div>
-                                <div class="settings-item-label">AssemblyAI API key</div>
-                                <div class="settings-item-description">Get your key from assemblyai.com</div>
-                            </div>
-                            <input type="password" class="input-field" id="assemblyaiKey" placeholder="Enter your AssemblyAI API key">
-                        </div>
-                    </div>
                     <div class="settings-item" style="align-items:center; gap:8px;">
                         <button class="btn" id="refreshMicrophones" type="button">Refresh microphones</button>
                         <button class="btn" id="startMicTest" type="button">Test microphone</button>
@@ -412,51 +384,87 @@
                     <audio id="micTestPlayback" controls style="display:none;width:100%;margin-top:8px;"></audio>
                 </div>
             </div>
-            
+
+            <!-- ── Text Generation ──────────────────────────────── -->
             <div class="settings-section">
                 <div class="settings-section-title">
-                    <i class="fas fa-robot"></i>
-                    LLM Provider
+                    <i class="fas fa-comment-dots"></i>
+                    Text Generation
                 </div>
                 <div class="settings-section-content">
                     <div class="settings-item">
                         <div>
                             <div class="settings-item-label">Provider</div>
-                            <div class="settings-item-description">Choose your AI provider</div>
+                            <div class="settings-item-description">AI provider for chat responses</div>
                         </div>
-                        <select class="input-field" id="llmProvider">
-                            <option value="gemini">Google Gemini</option>
-                            <option value="groq">Groq (Qwen 3.6)</option>
-                            <option value="cerebras">Cerebras (Zai GLM 4.7)</option>
-                        </select>
+                        <select class="input-field" id="textProvider" data-category="text"></select>
                     </div>
-                    <div id="geminiFields" class="settings-group">
-                        <div class="settings-item">
-                            <div>
-                                <div class="settings-item-label">Gemini API Key</div>
-                                <div class="settings-item-description">Your Google API key for Gemini models</div>
-                            </div>
-                            <input type="password" class="input-field" id="geminiKey" placeholder="Enter your Google API key">
+                    <div class="settings-item">
+                        <div>
+                            <div class="settings-item-label">Model</div>
+                            <div class="settings-item-description">Model used for text generation</div>
                         </div>
+                        <select class="input-field" id="textModel"></select>
                     </div>
-                    <div id="groqFields" class="settings-group" style="display:none;">
-                        <div class="settings-item">
-                            <div>
-                                <div class="settings-item-label">Groq API Key</div>
-                                <div class="settings-item-description">Your Groq API key from console.groq.com</div>
-                            </div>
-                            <input type="password" class="input-field" id="groqKey" placeholder="gsk_...">
+                </div>
+            </div>
+
+            <!-- ── Image Analysis ───────────────────────────────── -->
+            <div class="settings-section">
+                <div class="settings-section-title">
+                    <i class="fas fa-image"></i>
+                    Image Analysis
+                </div>
+                <div class="settings-section-content">
+                    <div class="settings-item">
+                        <div>
+                            <div class="settings-item-label">Provider</div>
+                            <div class="settings-item-description">AI provider for screenshot / image analysis</div>
                         </div>
+                        <select class="input-field" id="imageProvider" data-category="image"></select>
                     </div>
-                    <div id="cerebrasFields" class="settings-group" style="display:none;">
-                        <div class="settings-item">
-                            <div>
-                                <div class="settings-item-label">Cerebras API Key</div>
-                                <div class="settings-item-description">Your Cerebras API key from cloud.cerebras.ai</div>
-                            </div>
-                            <input type="password" class="input-field" id="cerebrasKey" placeholder="csk_...">
+                    <div class="settings-item">
+                        <div>
+                            <div class="settings-item-label">Model</div>
+                            <div class="settings-item-description">Model used for image reasoning</div>
                         </div>
+                        <select class="input-field" id="imageModel"></select>
                     </div>
+                </div>
+            </div>
+
+            <!-- ── Voice Transcription ─────────────────────────── -->
+            <div class="settings-section">
+                <div class="settings-section-title">
+                    <i class="fas fa-microphone"></i>
+                    Voice Transcription
+                </div>
+                <div class="settings-section-content">
+                    <div class="settings-item">
+                        <div>
+                            <div class="settings-item-label">Provider</div>
+                            <div class="settings-item-description">Speech-to-text provider</div>
+                        </div>
+                        <select class="input-field" id="voiceProvider" data-category="voice"></select>
+                    </div>
+                    <div class="settings-item">
+                        <div>
+                            <div class="settings-item-label">Model</div>
+                            <div class="settings-item-description">Transcription model</div>
+                        </div>
+                        <select class="input-field" id="voiceModel"></select>
+                    </div>
+                </div>
+            </div>
+
+            <!-- ── API Keys (one field per registered provider) ── -->
+            <div class="settings-section">
+                <div class="settings-section-title">
+                    <i class="fas fa-key"></i>
+                    API Keys
+                </div>
+                <div class="settings-section-content" id="apiKeysContainer">
+                    <!-- Populated dynamically from the provider registry -->
                 </div>
             </div>
             

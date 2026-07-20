@@ -1285,8 +1285,8 @@ class ApplicationController {
       const needsProgrammingLanguage = skillsRequiringProgrammingLanguage.includes(this.activeSkill);
 
       logger.info('LLM processing started', {
-        provider: llmService.provider,
-        model: llmService.model,
+        provider: config.getProviderFor('text'),
+        model: config.getModelFor('text'),
         skill: this.activeSkill,
         userInput: (text || '').substring(0, 200),
         programmingLanguage: needsProgrammingLanguage ? this.codingLanguage : 'not applicable'
@@ -1655,8 +1655,13 @@ class ApplicationController {
       groqKey: process.env.GROQ_API_KEY || "",
       cerebrasKey: process.env.CEREBRAS_API_KEY || "",
       assemblyaiKey: process.env.ASSEMBLYAI_API_KEY || "",
+      GEMINI_API_KEY: process.env.GEMINI_API_KEY || "",
+      GROQ_API_KEY: process.env.GROQ_API_KEY || "",
+      CEREBRAS_API_KEY: process.env.CEREBRAS_API_KEY || "",
+      ASSEMBLYAI_API_KEY: process.env.ASSEMBLYAI_API_KEY || "",
+      modelSelection: config.getAllModelSelections(),
       speechProvider: process.env.SPEECH_PROVIDER || 'groq',
-      llmProvider: process.env.LLM_PROVIDER || config.get('llm.provider') || 'gemini',
+      llmProvider: config.getLLMProvider(),
       speechAvailable: this.speechAvailable
     };
   }
@@ -1704,41 +1709,61 @@ class ApplicationController {
       }
 
       // ── Persist provider / API-key fields back to .env ──
-      // The settings UI is now the source of truth for these values.
-      // Writing to .env ensures they survive app restarts and are picked
-      // up the next time the app boots.
       const envUpdates = {};
-      if (settings.speechProvider === "groq" || settings.speechProvider === "assemblyai") {
-        envUpdates.SPEECH_PROVIDER = settings.speechProvider;
-      }
-      if (settings.assemblyaiKey !== undefined) {
-        envUpdates.ASSEMBLYAI_API_KEY = settings.assemblyaiKey;
-      }
-      if (settings.geminiKey !== undefined) {
-        envUpdates.GEMINI_API_KEY = settings.geminiKey;
-      }
-      if (settings.groqKey !== undefined) {
-        envUpdates.GROQ_API_KEY = settings.groqKey;
-      }
-      if (settings.cerebrasKey !== undefined) {
-        envUpdates.CEREBRAS_API_KEY = settings.cerebrasKey;
-      }
-      if (settings.llmProvider !== undefined) {
-        envUpdates.LLM_PROVIDER = settings.llmProvider;
+
+      // Model selection per category → TEXT_PROVIDER, TEXT_MODEL, etc.
+      if (settings.modelSelection) {
+        const cats = ['text', 'image', 'voice'];
+        cats.forEach(cat => {
+          const sel = settings.modelSelection[cat];
+          if (sel && sel.provider) {
+            envUpdates[`${cat.toUpperCase()}_PROVIDER`] = sel.provider;
+          }
+          if (sel && sel.model) {
+            envUpdates[`${cat.toUpperCase()}_MODEL`] = sel.model;
+          }
+        });
+        // Also set legacy LLM_PROVIDER / SPEECH_PROVIDER for backward compat
+        if (settings.modelSelection.text && settings.modelSelection.text.provider) {
+          envUpdates.LLM_PROVIDER = settings.modelSelection.text.provider;
+        }
+        if (settings.modelSelection.voice && settings.modelSelection.voice.provider) {
+          envUpdates.SPEECH_PROVIDER = settings.modelSelection.voice.provider;
+        }
       }
 
-    // Capture the previous speech provider BEFORE persisting so we can detect changes
-      const prevSpeechProvider = process.env.SPEECH_PROVIDER || 'groq';
+      // API keys — sent as env-var names directly (e.g. GEMINI_API_KEY)
+      ['GEMINI_API_KEY', 'GROQ_API_KEY', 'CEREBRAS_API_KEY', 'ASSEMBLYAI_API_KEY'].forEach(k => {
+        if (settings[k] !== undefined) envUpdates[k] = settings[k];
+      });
+
+      // Legacy single-provider keys (backward compat during transition)
+      if (settings.geminiKey !== undefined) envUpdates.GEMINI_API_KEY = settings.geminiKey;
+      if (settings.groqKey !== undefined) envUpdates.GROQ_API_KEY = settings.groqKey;
+      if (settings.cerebrasKey !== undefined) envUpdates.CEREBRAS_API_KEY = settings.cerebrasKey;
+      if (settings.assemblyaiKey !== undefined) envUpdates.ASSEMBLYAI_API_KEY = settings.assemblyaiKey;
+      if (settings.speechProvider !== undefined) envUpdates.SPEECH_PROVIDER = settings.speechProvider;
+      if (settings.llmProvider !== undefined) envUpdates.LLM_PROVIDER = settings.llmProvider;
+
+    // Capture the previous speech provider BEFORE persisting
+      const prevVoiceProvider = config.getProviderFor('voice') || 'groq';
 
       const persistedKeys = this.persistEnvUpdates(envUpdates);
 
-      // Reinitialize only after the provider and keys are persisted, so the
-      // selected SDK client and model always come from the same provider.
-      if (settings.llmProvider !== undefined || settings.geminiKey !== undefined || settings.groqKey !== undefined || settings.cerebrasKey !== undefined) {
+      // Reinitialize LLM when text/image provider/model or any API key changes
+      const llmProviderChanged = settings.modelSelection &&
+        (settings.modelSelection.text || settings.modelSelection.image);
+      const anyLLMKeyChanged = settings.GEMINI_API_KEY !== undefined ||
+        settings.GROQ_API_KEY !== undefined || settings.CEREBRAS_API_KEY !== undefined ||
+        settings.geminiKey !== undefined || settings.groqKey !== undefined ||
+        settings.cerebrasKey !== undefined || settings.llmProvider !== undefined;
+
+      if (llmProviderChanged || anyLLMKeyChanged) {
         try {
           llmService.initializeClient();
           logger.info("LLM service reinitialized after provider or key update", {
-            provider: config.getLLMProvider(),
+            textProvider: config.getProviderFor('text'),
+            imageProvider: config.getProviderFor('image'),
           });
         } catch (e) {
           logger.warn("Failed to reinitialize LLM service after provider or key update", {
@@ -1747,13 +1772,12 @@ class ApplicationController {
         }
       }
 
-      // Reinitialize speech service when provider changes or when the
-      // API key for the currently active provider is updated.
-      const providerChanged = settings.speechProvider && prevSpeechProvider !== settings.speechProvider;
-      const activeProvider = settings.speechProvider || prevSpeechProvider;
-      const relevantKeyChanged = (activeProvider === 'assemblyai' && settings.assemblyaiKey !== undefined)
-        || (activeProvider === 'groq' && settings.groqKey !== undefined);
-      if (providerChanged || relevantKeyChanged) {
+      // Reinitialize speech service when voice provider/model or key changes
+      const voiceChanged = settings.modelSelection && settings.modelSelection.voice;
+      const voiceKeyChanged = settings.GROQ_API_KEY !== undefined ||
+        settings.ASSEMBLYAI_API_KEY !== undefined || settings.speechProvider !== undefined;
+
+      if (voiceChanged || voiceKeyChanged) {
         try {
           speechService.initializeClient();
           this.speechAvailable = speechService.isAvailable

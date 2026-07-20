@@ -453,64 +453,62 @@ class ChatWindowUI {
     renderAssistantResponse(response) {
         if (!response || typeof response !== 'string') return;
         
-        // Remember scroll position before adding response
-        const prevLastChild = this.elements.chatMessages.lastElementChild;
+        // Parse response to maintain order of text and code blocks
+        const segments = this.parseResponseSegments(response);
         
-        const blocks = this.extractCodeBlocks(response);
-        const textOnly = this.stripCodeBlocks(response, blocks);
-        let firstResponseMsg = null;
-        if (textOnly && textOnly.trim().length) {
-            this.addMessage(textOnly, 'assistant');
-            firstResponseMsg = prevLastChild ? prevLastChild.nextElementSibling : this.elements.chatMessages.firstElementChild;
-        }
-        blocks.forEach(b => this.addCodeSnippet(b.language, b.code));
-        
-        // Scroll to the start of the response
-        if (firstResponseMsg) {
-            firstResponseMsg.scrollIntoView({ block: 'start', behavior: 'smooth' });
-        }
-    }
-
-    extractCodeBlocks(text) {
-        const codeBlockRegex = /```(\w+)?\n([\s\S]*?)```/g;
-        const blocks = [];
-        let match;
-        while ((match = codeBlockRegex.exec(text)) !== null) {
-            blocks.push({ language: match[1] || 'text', code: (match[2] || '').trim(), fullMatch: match[0] });
-        }
-        return blocks;
-    }
-
-    stripCodeBlocks(text, blocks) {
-        let result = text || '';
-        blocks.forEach(b => { result = result.replace(b.fullMatch, ''); });
-        return result.replace(/\n\s*\n\s*\n/g, '\n\n').trim();
-    }
-
-    addCodeSnippet(language, code) {
-        if (!this.elements.chatMessages) return;
+        // Create a single message container for the entire response
         const messageDiv = document.createElement('div');
         messageDiv.className = 'message assistant';
+        
         const timeDiv = document.createElement('div');
         timeDiv.className = 'message-time';
         timeDiv.textContent = new Date().toLocaleTimeString();
+        
         const textDiv = document.createElement('div');
         textDiv.className = 'message-text';
+        
+        // Render each segment in order within the same message
+        segments.forEach((segment) => {
+            if (segment.type === 'text' && segment.content.trim().length) {
+                const textContent = document.createElement('div');
+                textContent.innerHTML = this.formatMarkdown(segment.content);
+                textDiv.appendChild(textContent);
+            } else if (segment.type === 'code') {
+                const codeBlock = this.createCodeBlock(segment.language, segment.code);
+                textDiv.appendChild(codeBlock);
+            }
+        });
+        
+        messageDiv.appendChild(timeDiv);
+        messageDiv.appendChild(textDiv);
+        this.elements.chatMessages.appendChild(messageDiv);
+        
+        // Scroll to the new message
+        messageDiv.scrollIntoView({ block: 'start', behavior: 'smooth' });
+    }
+
+    // Create a code block element (extracted from addCodeSnippet)
+    createCodeBlock(language, code) {
         const lang = (language || 'text').toLowerCase();
         const escapedCode = this.escapeHtmlForSnippet(code || '');
-        textDiv.innerHTML = `
-            <div class="code-block">
-                <div class="code-header">
-                    <span>${lang.toUpperCase()}</span>
-                    <button class="copy-btn">Copy</button>
-                </div>
-                <div class="code-content">
-                    <pre><code class="language-${lang}">${escapedCode}</code></pre>
-                </div>
+        
+        const codeBlockDiv = document.createElement('div');
+        codeBlockDiv.className = 'code-block';
+        codeBlockDiv.style.marginTop = '10px';
+        codeBlockDiv.style.marginBottom = '10px';
+        
+        codeBlockDiv.innerHTML = `
+            <div class="code-header">
+                <span>${lang.toUpperCase()}</span>
+                <button class="copy-btn">Copy</button>
+            </div>
+            <div class="code-content">
+                <pre><code class="language-${lang}">${escapedCode}</code></pre>
             </div>
         `;
+        
         // Attach copy handler
-        const copyBtn = textDiv.querySelector('.copy-btn');
+        const copyBtn = codeBlockDiv.querySelector('.copy-btn');
         if (copyBtn) {
             copyBtn.addEventListener('click', async (e) => {
                 e.stopPropagation();
@@ -531,10 +529,64 @@ class ChatWindowUI {
                 } catch (err) { /* ignore */ }
             });
         }
-        messageDiv.appendChild(timeDiv);
-        messageDiv.appendChild(textDiv);
-        this.elements.chatMessages.appendChild(messageDiv);
+        
+        return codeBlockDiv;
     }
+
+    // Parse response into ordered segments of text and code blocks
+    parseResponseSegments(text) {
+        const segments = [];
+        const codeBlockRegex = /```(\w+)?\n([\s\S]*?)```/g;
+        let lastIndex = 0;
+        let match;
+        
+        while ((match = codeBlockRegex.exec(text)) !== null) {
+            // Add text before this code block
+            if (match.index > lastIndex) {
+                const textContent = text.substring(lastIndex, match.index).trim();
+                if (textContent) {
+                    segments.push({ type: 'text', content: textContent });
+                }
+            }
+            
+            // Add the code block
+            segments.push({
+                type: 'code',
+                language: match[1] || 'text',
+                code: (match[2] || '').trim()
+            });
+            
+            lastIndex = match.index + match[0].length;
+        }
+        
+        // Add any remaining text after the last code block
+        if (lastIndex < text.length) {
+            const textContent = text.substring(lastIndex).trim();
+            if (textContent) {
+                segments.push({ type: 'text', content: textContent });
+            }
+        }
+        
+        return segments;
+    }
+
+    extractCodeBlocks(text) {
+        const codeBlockRegex = /```(\w+)?\n([\s\S]*?)```/g;
+        const blocks = [];
+        let match;
+        while ((match = codeBlockRegex.exec(text)) !== null) {
+            blocks.push({ language: match[1] || 'text', code: (match[2] || '').trim(), fullMatch: match[0] });
+        }
+        return blocks;
+    }
+
+    stripCodeBlocks(text, blocks) {
+        let result = text || '';
+        blocks.forEach(b => { result = result.replace(b.fullMatch, ''); });
+        return result.replace(/\n\s*\n\s*\n/g, '\n\n').trim();
+    }
+
+
 
     escapeHtmlForSnippet(text) {
         const div = document.createElement('div');

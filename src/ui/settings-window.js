@@ -3,16 +3,26 @@ document.addEventListener('DOMContentLoaded', () => {
         info: (...args) => console.log('[SettingsWindowUI]', ...args)
     };
 
+    // ── Provider registry (mirrors config.js so the UI can build
+    //     dropdowns without an IPC round-trip) ────────────────────
+    const PROVIDER_REGISTRY = {
+      gemini:   { name:'Google Gemini', apiKeyEnv:'GEMINI_API_KEY',   capabilities:{text:true,image:true,voice:false}, models:{text:['gemini-3.1-flash-lite','gemma-4-31b-it','gemini-2.5-pro'],image:['gemini-3.1-flash-lite','gemma-4-31b-it','gemini-2.5-pro']} },
+      groq:     { name:'Groq',          apiKeyEnv:'GROQ_API_KEY',     capabilities:{text:true,image:true,voice:true},  models:{text:['qwen/qwen3.6-27b','openai/gpt-oss-120b','meta-llama/llama-4-maverick-17b-128e-instruct'],image:['qwen/qwen3.6-27b'],voice:['whisper-large-v3-turbo']} },
+      cerebras: { name:'Cerebras',      apiKeyEnv:'CEREBRAS_API_KEY', capabilities:{text:true,image:true,voice:false}, models:{text:['zai-glm-4.7','gemma-4-31b'],image:['gemma-4-31b']} },
+      assemblyai:{ name:'AssemblyAI',   apiKeyEnv:'ASSEMBLYAI_API_KEY',capabilities:{text:false,image:false,voice:true}, models:{voice:['universal-3-5-pro']} },
+    };
+    const CATEGORIES = ['text','image','voice'];
+
     // Get DOM elements
     const closeButton = document.getElementById('closeButton');
     const quitButton = document.getElementById('quitButton');
-    const speechProviderSelect = document.getElementById('speechProvider');
-    const assemblyaiKeyInput = document.getElementById('assemblyaiKey');
-    const geminiKeyInput = document.getElementById('geminiKey');
-    const groqKeyInput = document.getElementById('groqKey');
-    const cerebrasKeyInput = document.getElementById('cerebrasKey');
-    const groqSpeechKeyInput = document.getElementById('groqSpeechKey');
-    const llmProviderSelect = document.getElementById('llmProvider');
+    const textProviderSelect  = document.getElementById('textProvider');
+    const textModelSelect     = document.getElementById('textModel');
+    const imageProviderSelect = document.getElementById('imageProvider');
+    const imageModelSelect    = document.getElementById('imageModel');
+    const voiceProviderSelect = document.getElementById('voiceProvider');
+    const voiceModelSelect    = document.getElementById('voiceModel');
+    const apiKeysContainer    = document.getElementById('apiKeysContainer');
     const windowGapInput = document.getElementById('windowGap');
     const windowOpacitySlider = document.getElementById('windowOpacity');
     const opacityValueLabel = document.getElementById('opacityValue');
@@ -176,15 +186,80 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     };
 
+    // ── Build API key fields dynamically from the provider registry ─
+    const buildApiKeyFields = (savedKeys) => {
+        if (!apiKeysContainer) return;
+        apiKeysContainer.innerHTML = '';
+        const keys = savedKeys || {};
+        Object.entries(PROVIDER_REGISTRY).forEach(([key, p]) => {
+            const div = document.createElement('div');
+            div.className = 'settings-item';
+            div.dataset.provider = key;
+            const placeholders = { GEMINI_API_KEY:'Enter your Google API key', GROQ_API_KEY:'gsk_…', CEREBRAS_API_KEY:'csk_…', ASSEMBLYAI_API_KEY:'Enter your AssemblyAI API key' };
+            div.innerHTML = `<div>
+                <div class="settings-item-label">${p.name} API Key</div>
+                <div class="settings-item-description">Used when ${p.name} is selected as a provider</div>
+            </div>
+            <input type="password" class="input-field api-key-input" data-provider="${key}"
+                   placeholder="${placeholders[p.apiKeyEnv] || 'Enter your API key'}"
+                   value="${keys[key] || ''}">`;
+            apiKeysContainer.appendChild(div);
+        });
+    };
+
+    // ── Cascading: repopulate model dropdown when provider changes ─
+    const populateModels = (category, provider) => {
+        const modelSelect = document.getElementById(category + 'Model');
+        if (!modelSelect) return;
+        const models = (PROVIDER_REGISTRY[provider] && PROVIDER_REGISTRY[provider].models && PROVIDER_REGISTRY[provider].models[category]) || [];
+        modelSelect.innerHTML = '';
+        if (models.length === 0) {
+            modelSelect.add(new Option('(none available)', ''));
+        } else {
+            models.forEach(m => modelSelect.add(new Option(m, m)));
+        }
+    };
+
+    // ── Build all provider dropdowns ───────────────────────────────
+    const buildProviderDropdowns = (savedSelection) => {
+        const sel = savedSelection || {};
+        CATEGORIES.forEach(cat => {
+            const providerSelect = document.getElementById(cat + 'Provider');
+            if (!providerSelect) return;
+            providerSelect.innerHTML = '';
+            const providers = Object.entries(PROVIDER_REGISTRY)
+                .filter(([,p]) => p.capabilities && p.capabilities[cat])
+                .map(([k,p]) => ({key:k, name:p.name}));
+            if (providers.length === 0) {
+                providerSelect.add(new Option('(none available)', ''));
+                return;
+            }
+            providers.forEach(p => providerSelect.add(new Option(p.name, p.key)));
+            const saved = (sel[cat] && sel[cat].provider) || '';
+            providerSelect.value = providers.some(p => p.key === saved) ? saved : providers[0].key;
+            populateModels(cat, providerSelect.value);
+            const modelSelect = document.getElementById(cat + 'Model');
+            if (modelSelect) {
+                const savedModel = (sel[cat] && sel[cat].model) || '';
+                if ([...modelSelect.options].some(o => o.value === savedModel)) {
+                    modelSelect.value = savedModel;
+                }
+            }
+        });
+    };
+
     // Function to load settings into UI
     const loadSettingsIntoUI = (settings) => {
-        if (settings.speechProvider && speechProviderSelect) speechProviderSelect.value = settings.speechProvider;
-        if (assemblyaiKeyInput) assemblyaiKeyInput.value = settings.assemblyaiKey || '';
-        if (geminiKeyInput) geminiKeyInput.value = settings.geminiKey || '';
-        if (groqKeyInput) groqKeyInput.value = settings.groqKey || '';
-        if (cerebrasKeyInput) cerebrasKeyInput.value = settings.cerebrasKey || '';
-        if (groqSpeechKeyInput) groqSpeechKeyInput.value = settings.groqKey || '';
-        if (llmProviderSelect) llmProviderSelect.value = settings.llmProvider || 'gemini';
+        const modelSelection = settings.modelSelection || {};
+        buildProviderDropdowns(modelSelection);
+
+        const apiKeys = {};
+        Object.keys(PROVIDER_REGISTRY).forEach(k => {
+            const envKey = PROVIDER_REGISTRY[k].apiKeyEnv;
+            apiKeys[k] = settings[envKey] || settings[`${k}Key`] || '';
+        });
+        buildApiKeyFields(apiKeys);
+
         if (windowGapInput) windowGapInput.value = settings.windowGap || '';
         if (windowOpacitySlider && settings.windowOpacity !== undefined) {
             windowOpacitySlider.value = settings.windowOpacity;
@@ -215,7 +290,6 @@ document.addEventListener('DOMContentLoaded', () => {
             });
         }
 
-        updateSpeechFieldStates();
     };
 
     // Load settings when window opens
@@ -241,61 +315,67 @@ document.addEventListener('DOMContentLoaded', () => {
     // Save settings helper function
     const saveSettings = () => {
         const settings = {};
-        if (speechProviderSelect) settings.speechProvider = speechProviderSelect.value;
-        if (assemblyaiKeyInput) settings.assemblyaiKey = assemblyaiKeyInput.value;
-        if (geminiKeyInput) settings.geminiKey = geminiKeyInput.value;
-        if (groqKeyInput) settings.groqKey = groqKeyInput.value;
-        if (cerebrasKeyInput) settings.cerebrasKey = cerebrasKeyInput.value;
-        if (groqSpeechKeyInput) settings.groqKey = groqSpeechKeyInput.value;
-        if (llmProviderSelect) settings.llmProvider = llmProviderSelect.value;
+
+        // Model selection per category
+        const modelSelection = {};
+        CATEGORIES.forEach(cat => {
+            const providerSelect = document.getElementById(cat + 'Provider');
+            const modelSelect = document.getElementById(cat + 'Model');
+            if (providerSelect && modelSelect) {
+                modelSelection[cat] = { provider: providerSelect.value, model: modelSelect.value };
+            }
+        });
+        settings.modelSelection = modelSelection;
+
+        // API keys from the dynamically-built fields
+        if (apiKeysContainer) {
+            apiKeysContainer.querySelectorAll('.api-key-input').forEach(input => {
+                const provider = input.dataset.provider;
+                const envKey = PROVIDER_REGISTRY[provider] ? PROVIDER_REGISTRY[provider].apiKeyEnv : null;
+                if (envKey && input.value) settings[envKey] = input.value;
+            });
+        }
+
         if (windowGapInput) settings.windowGap = windowGapInput.value;
         if (codingLanguageSelect) settings.codingLanguage = codingLanguageSelect.value;
         if (activeSkillSelect) settings.activeSkill = activeSkillSelect.value;
         if (resumeInput) settings.resume = resumeInput.value;
         if (windowOpacitySlider) settings.windowOpacity = parseFloat(windowOpacitySlider.value);
         if (microphoneDeviceSelect) settings.microphoneDeviceId = microphoneDeviceSelect.value || 'default';
-        
+
         window.api.send('save-settings', settings);
     };
 
-    const updateSpeechFieldStates = () => {
-        const provider = speechProviderSelect ? speechProviderSelect.value : 'groq';
-
-        const groqGroup = document.getElementById('groqSpeechFields');
-        const assemblyaiGroup = document.getElementById('assemblyaiSpeechFields');
-
-        if (groqGroup) {
-            groqGroup.style.display = provider === 'groq' ? '' : 'none';
+    // ── Wire up cascading provider → model for all 3 categories ──
+    CATEGORIES.forEach(cat => {
+        const providerSelect = document.getElementById(cat + 'Provider');
+        const modelSelect = document.getElementById(cat + 'Model');
+        if (providerSelect) {
+            providerSelect.addEventListener('change', () => {
+                populateModels(cat, providerSelect.value);
+                saveSettings();
+            });
         }
-        if (assemblyaiGroup) {
-            assemblyaiGroup.style.display = provider === 'assemblyai' ? '' : 'none';
+        if (modelSelect) {
+            modelSelect.addEventListener('change', () => saveSettings());
         }
-    };
+    });
 
-    // Add event listeners for all inputs
-    const inputs = [
-        assemblyaiKeyInput,
-        geminiKeyInput,
-        groqKeyInput,
-        cerebrasKeyInput,
-        groqSpeechKeyInput,
-        windowGapInput,
-        resumeInput
-    ];
+    // Wire up API key fields
+    if (apiKeysContainer) {
+        apiKeysContainer.addEventListener('change', saveSettings);
+        apiKeysContainer.addEventListener('blur', (e) => {
+            if (e.target.classList.contains('api-key-input')) saveSettings();
+        });
+    }
 
-    inputs.forEach(input => {
+    // Non-provider inputs
+    [windowGapInput, resumeInput].forEach(input => {
         if (input) {
             input.addEventListener('change', saveSettings);
             input.addEventListener('blur', saveSettings);
         }
     });
-
-    if (speechProviderSelect) {
-        speechProviderSelect.addEventListener('change', () => {
-            updateSpeechFieldStates();
-            saveSettings();
-        });
-    }
 
     if (refreshMicrophonesButton) refreshMicrophonesButton.addEventListener('click', () => refreshMicrophones());
     if (startMicTestButton) startMicTestButton.addEventListener('click', startMicrophoneTest);
@@ -305,20 +385,13 @@ document.addEventListener('DOMContentLoaded', () => {
         await window.electronAPI.saveSettings({ microphoneDeviceId: microphoneDeviceSelect.value || 'default' });
     });
 
-    if (groqKeyInput && groqSpeechKeyInput) {
-        groqKeyInput.addEventListener('input', () => { groqSpeechKeyInput.value = groqKeyInput.value; });
-        groqSpeechKeyInput.addEventListener('input', () => { groqKeyInput.value = groqSpeechKeyInput.value; });
-    }
-
     // Language selection handler
     if (codingLanguageSelect) {
         codingLanguageSelect.addEventListener('change', (e) => {
             const lang = e.target.value;
-            // use electronAPI so main broadcast is consistent
             if (window.electronAPI && window.electronAPI.saveSettings) {
                 window.electronAPI.saveSettings({ codingLanguage: lang });
             } else {
-                // fallback
                 saveSettings();
             }
         });
@@ -328,12 +401,9 @@ document.addEventListener('DOMContentLoaded', () => {
     if (activeSkillSelect) {
         activeSkillSelect.addEventListener('change', (e) => {
             saveSettings();
-            // Also update the main window
             window.api.send('update-skill', e.target.value);
         });
     }
-
-    updateSpeechFieldStates();
 
     // Opacity slider: live preview while dragging, persist on release
     if (windowOpacitySlider) {
@@ -358,25 +428,6 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         });
     }
-
-    // LLM provider field toggle
-    const updateLLMFieldStates = () => {
-        const provider = llmProviderSelect ? llmProviderSelect.value : 'gemini';
-        const geminiGroup = document.getElementById('geminiFields');
-        const groqGroup = document.getElementById('groqFields');
-        const cerebrasGroup = document.getElementById('cerebrasFields');
-        if (geminiGroup) geminiGroup.style.display = provider === 'gemini' ? '' : 'none';
-        if (groqGroup) groqGroup.style.display = provider === 'groq' ? '' : 'none';
-        if (cerebrasGroup) cerebrasGroup.style.display = provider === 'cerebras' ? '' : 'none';
-    };
-
-    if (llmProviderSelect) {
-        llmProviderSelect.addEventListener('change', () => {
-            updateLLMFieldStates();
-            saveSettings();
-        });
-    }
-    updateLLMFieldStates();
 
     // Initialize icon grid with correct paths
     const initializeIconGrid = () => {

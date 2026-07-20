@@ -8,7 +8,6 @@ const assemblyaiTranscriber = require('./assemblyai-transcription.service');
 class SpeechService extends EventEmitter {
   constructor() {
     super();
-    this.provider = process.env.SPEECH_PROVIDER || 'groq';
     this.isRecording = false;
     this.available = false;
     this.client = null;
@@ -16,10 +15,12 @@ class SpeechService extends EventEmitter {
   }
 
   initializeClient() {
-    this.provider = process.env.SPEECH_PROVIDER || 'groq';
+    const sel = config.getModelSelection('voice');
+    this.provider = sel.provider;
+    this.model = sel.model;
 
     if (this.provider === 'assemblyai') {
-      const apiKey = process.env.ASSEMBLYAI_API_KEY;
+      const apiKey = config.getApiKey('ASSEMBLYAI');
       this.available = Boolean(apiKey && apiKey !== 'your_assemblyai_api_key_here');
       this.client = null; // No SDK client needed for AssemblyAI (uses fetch)
       this.emit('status', this.available

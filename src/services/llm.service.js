@@ -6,9 +6,10 @@ const { promptLoader } = require('../../prompt-loader');
 
 class LLMService {
   constructor() {
-    this.client = null;
+    this.geminiClient = null;
     this.groqClient = null;
     this.cerebrasApiKey = null;
+    // Legacy accessors — kept for backward compat with existing logging code
     this.model = null;
     this.provider = 'gemini';
     this.isInitialized = false;
@@ -18,21 +19,31 @@ class LLMService {
     this.initializeClient();
   }
 
+  /** Initialize all provider clients for which API keys are available.
+   *  The active model for each request is resolved per-category from
+   *  config.getModelSelection(category) so text/image can use different
+   *  providers simultaneously. */
   initializeClient() {
-    this.client = null;
+    this.geminiClient = null;
     this.groqClient = null;
     this.cerebrasApiKey = null;
-    this.model = null;
     this.isInitialized = false;
-    this.provider = config.getLLMProvider();
-    
-    if (this.provider === 'groq') {
-      this._initializeGroqClient();
-    } else if (this.provider === 'cerebras') {
-      this._initializeCerebrasClient();
-    } else {
-      this._initializeGeminiClient();
-    }
+
+    this._initializeGeminiClient();
+    this._initializeGroqClient();
+    this._initializeCerebrasClient();
+
+    // Set legacy provider/model from the text category for logging compat
+    const textSel = config.getModelSelection('text');
+    this.provider = textSel.provider;
+    this.model = textSel.model;
+    this.isInitialized = !!(this.geminiClient || this.groqClient || this.cerebrasApiKey);
+  }
+
+  /** Resolve {provider, model} for the given category at request time. */
+  _resolveProviderModel(category) {
+    const sel = config.getModelSelection(category || 'text');
+    return sel;
   }
 
   _initializeGeminiClient() {
@@ -47,14 +58,9 @@ class LLMService {
     }
 
     try {
-      this.client = new GoogleGenAI({ apiKey });
-      this.model = config.get('llm.gemini.model');
-      this.isInitialized = true;
-      this.provider = 'gemini';
+      this.geminiClient = new GoogleGenAI({ apiKey });
       
-      logger.info('Gemini AI client initialized successfully', {
-        model: this.model
-      });
+      logger.info('Gemini AI client initialized successfully');
     } catch (error) {
       logger.error('Failed to initialize Gemini client', { 
         error: error.message 
@@ -74,13 +80,8 @@ class LLMService {
 
     try {
       this.groqClient = new Groq({ apiKey, dangerouslyAllowBrowser: true });
-      this.model = config.get('llm.groq.model');
-      this.isInitialized = true;
-      this.provider = 'groq';
       
-      logger.info('Groq AI client initialized successfully', {
-        model: this.model
-      });
+      logger.info('Groq AI client initialized successfully');
     } catch (error) {
       logger.error('Failed to initialize Groq client', {
         error: error.message
@@ -90,14 +91,6 @@ class LLMService {
 
   _initializeCerebrasClient() {
     const apiKey = config.getApiKey('CEREBRAS');
-    const cfgModel = config.get('llm.cerebras.model');
-
-    logger.debug('Cerebras init attempt', {
-      hasApiKey: !!apiKey,
-      apiKeyPrefix: apiKey ? apiKey.substring(0, 8) + '...' : 'none',
-      cfgModel,
-      envProvider: process.env.LLM_PROVIDER
-    });
 
     if (!apiKey || apiKey === 'your_cerebras_api_key_here') {
       logger.warn('Cerebras API key not configured', {
@@ -108,13 +101,8 @@ class LLMService {
 
     try {
       this.cerebrasApiKey = apiKey;
-      this.model = cfgModel;
-      this.isInitialized = true;
-      this.provider = 'cerebras';
 
-      logger.info('Cerebras AI client initialized successfully', {
-        model: this.model
-      });
+      logger.info('Cerebras AI client initialized successfully');
     } catch (error) {
       logger.error('Failed to initialize Cerebras client', {
         error: error.message
@@ -317,10 +305,13 @@ class LLMService {
 
     const startTime = Date.now();
     this.requestCount++;
+    const { provider, model } = this._resolveProviderModel('image');
+    this.provider = provider;
+    this.model = model;
 
     logger.info('LLM image streaming started', {
-      provider: this.provider,
-      model: this.model,
+      provider,
+      model,
       activeSkill,
       imageSize: imageBuffer.length,
       requestId: this.requestCount
@@ -329,8 +320,10 @@ class LLMService {
     try {
       let fullText;
       
-      if (this.provider === 'groq') {
+      if (provider === 'groq') {
         fullText = await this._executeGroqImageStream(imageBuffer, mimeType, activeSkill, programmingLanguage, sessionMemory, onDelta);
+      } else if (provider === 'cerebras') {
+        fullText = await this._executeCerebrasImageStream(imageBuffer, mimeType, activeSkill, programmingLanguage, sessionMemory, onDelta);
       } else {
         const skillPrompt = promptLoader.getSkillPrompt(activeSkill, programmingLanguage) || '';
         const base64 = imageBuffer.toString('base64');
@@ -495,9 +488,13 @@ class LLMService {
     const startTime = Date.now();
     this.requestCount++;
 
+    const { provider, model } = this._resolveProviderModel('text');
+    this.provider = provider;
+    this.model = model;
+
     logger.info('LLM text streaming started', {
-      provider: this.provider,
-      model: this.model,
+      provider,
+      model,
       activeSkill,
       textPreview: (text || '').substring(0, 120),
       requestId: this.requestCount
@@ -506,9 +503,9 @@ class LLMService {
     try {
       let fullText;
       
-      if (this.provider === 'groq') {
+      if (provider === 'groq') {
         fullText = await this._executeGroqStream(text, activeSkill, sessionMemory, programmingLanguage, onDelta);
-      } else if (this.provider === 'cerebras') {
+      } else if (provider === 'cerebras') {
         fullText = await this._executeCerebrasStream(text, activeSkill, sessionMemory, programmingLanguage, onDelta);
       } else {
         const geminiRequest = this.buildGeminiRequest(text, activeSkill, sessionMemory, programmingLanguage);
@@ -1067,9 +1064,13 @@ The user is speaking in ${activeSkill.toUpperCase()} mode. Treat each transcript
     const startTime = Date.now();
     this.requestCount++;
 
+    const { provider, model } = this._resolveProviderModel('text');
+    this.provider = provider;
+    this.model = model;
+
     logger.info('LLM transcription streaming started', {
-      provider: this.provider,
-      model: this.model,
+      provider,
+      model,
       activeSkill,
       textPreview: (text || '').substring(0, 120),
       requestId: this.requestCount
@@ -1079,8 +1080,10 @@ The user is speaking in ${activeSkill.toUpperCase()} mode. Treat each transcript
       const geminiRequest = this.buildIntelligentTranscriptionRequest(text, activeSkill, sessionMemory, programmingLanguage);
 
       let fullText;
-      if (this.provider === 'cerebras') {
+      if (provider === 'cerebras') {
         fullText = await this._executeCerebrasStream(text, activeSkill, sessionMemory, programmingLanguage, onDelta);
+      } else if (provider === 'groq') {
+        fullText = await this._executeGroqStream(text, activeSkill, sessionMemory, programmingLanguage, onDelta);
       } else {
         fullText = await this.executeStreamingRequest(geminiRequest, (delta) => {
           if (typeof onDelta === 'function' && delta) {
@@ -1438,6 +1441,113 @@ The user is speaking in ${activeSkill.toUpperCase()} mode. Treat each transcript
   _executeCerebrasStream(text, activeSkill, sessionMemory, programmingLanguage, onDelta) {
     const https = require('https');
     const messages = this._buildCerebrasMessages(text, activeSkill, sessionMemory, programmingLanguage);
+    const genConfig = config.get('llm.cerebras.generation') || {};
+    const timeout = config.get('llm.cerebras.timeout') || 120000;
+
+    const postData = JSON.stringify({
+      model: this.model,
+      messages,
+      temperature: genConfig.temperature || 0.6,
+      max_tokens: genConfig.maxTokens || 65000,
+      top_p: genConfig.topP || 0.95,
+      stream: true
+    });
+
+    const options = {
+      method: 'POST',
+      hostname: 'api.cerebras.ai',
+      path: '/v1/chat/completions',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${this.cerebrasApiKey}`,
+        'Content-Length': Buffer.byteLength(postData)
+      },
+      timeout
+    };
+
+    return new Promise((resolve, reject) => {
+      const req = https.request(options, (res) => {
+        if (res.statusCode !== 200) {
+          let errBody = '';
+          res.on('data', (c) => { errBody += c; });
+          res.on('end', () => reject(new Error(`Cerebras HTTP ${res.statusCode}: ${errBody}`)));
+          return;
+        }
+
+        let fullText = '';
+        let buffer = '';
+
+        res.setEncoding('utf8');
+        res.on('data', (chunk) => {
+          buffer += chunk;
+          let idx;
+          while ((idx = buffer.indexOf('\n')) !== -1) {
+            const line = buffer.slice(0, idx).trim();
+            buffer = buffer.slice(idx + 1);
+            if (!line.startsWith('data:')) continue;
+            const payload = line.slice(5).trim();
+            if (!payload || payload === '[DONE]') continue;
+            try {
+              const json = JSON.parse(payload);
+              const content = json.choices?.[0]?.delta?.content;
+              if (content) {
+                fullText += content;
+                if (typeof onDelta === 'function') {
+                  onDelta(content);
+                }
+              }
+            } catch (_) { /* skip partial JSON */ }
+          }
+        });
+
+        res.on('end', () => resolve(fullText.trim()));
+        res.on('error', (error) => reject(new Error(`Cerebras streaming error: ${error.message}`)));
+      });
+
+      req.on('error', (error) => reject(new Error(`Cerebras request failed: ${error.message}`)));
+      req.on('timeout', () => {
+        req.destroy();
+        reject(new Error('Cerebras request timeout'));
+      });
+
+      req.write(postData);
+      req.end();
+    });
+  }
+
+  _buildCerebrasImageMessages(imageBuffer, mimeType, activeSkill, programmingLanguage, sessionMemory = []) {
+    const skillPrompt = promptLoader.getSkillPrompt(activeSkill, programmingLanguage) || '';
+    const base64 = Buffer.isBuffer(imageBuffer) 
+      ? imageBuffer.toString('base64') 
+      : Buffer.from(imageBuffer).toString('base64');
+    const dataUrl = `data:${mimeType || 'image/png'};base64,${base64}`;
+
+    const messages = [];
+    if (skillPrompt.trim()) {
+      messages.push({ role: 'system', content: skillPrompt.trim() });
+    }
+    if (Array.isArray(sessionMemory) && sessionMemory.length > 0) {
+      for (const entry of sessionMemory) {
+        const role = entry.role === 'model' ? 'assistant' : (entry.role === 'user' ? 'user' : entry.role);
+        const content = entry.content || entry.text || '';
+        if (content && (role === 'user' || role === 'assistant')) {
+          messages.push({ role, content });
+        }
+      }
+    }
+    messages.push({
+      role: 'user',
+      content: [
+        { type: 'text', text: 'Analyze this image and provide a clear, concise response:' },
+        { type: 'image_url', image_url: { url: dataUrl } }
+      ]
+    });
+    return messages;
+  }
+
+  async _executeCerebrasImageStream(imageBuffer, mimeType, activeSkill, programmingLanguage, sessionMemory = [], onDelta) {
+    const https = require('https');
+    const messages = this._buildCerebrasImageMessages(imageBuffer, mimeType, activeSkill, programmingLanguage, sessionMemory);
     const genConfig = config.get('llm.cerebras.generation') || {};
     const timeout = config.get('llm.cerebras.timeout') || 120000;
 

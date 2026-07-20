@@ -1620,14 +1620,126 @@
           recentResponseHashes.delete(first);
         }
 
-        const blocks = extractCodeBlocks(response);
-        const textOnly = stripCodeBlocks(response, blocks);
-        // Add text response first (if any)
-        if (textOnly && textOnly.trim().length) {
-          addMessage(textOnly, 'assistant');
+        // Parse response to maintain order of text and code blocks
+        const segments = parseResponseSegments(response);
+        
+        // Create a single message container for the entire response
+        const messageDiv = document.createElement('div');
+        messageDiv.className = 'message assistant';
+        
+        const roleDiv = document.createElement('div');
+        roleDiv.className = 'message-role';
+        roleDiv.textContent = 'Assistant';
+        
+        const timeDiv = document.createElement('div');
+        timeDiv.className = 'message-time';
+        timeDiv.textContent = new Date().toLocaleTimeString();
+        
+        const textDiv = document.createElement('div');
+        textDiv.className = 'message-text';
+        
+        // Render each segment in order within the same message
+        segments.forEach((segment) => {
+          if (segment.type === 'text' && segment.content.trim().length) {
+            const textContent = document.createElement('div');
+            textContent.innerHTML = formatMarkdown(segment.content);
+            textDiv.appendChild(textContent);
+          } else if (segment.type === 'code') {
+            const codeBlock = createCodeBlock(segment.language, segment.code);
+            textDiv.appendChild(codeBlock);
+          }
+        });
+        
+        messageDiv.appendChild(roleDiv);
+        messageDiv.appendChild(timeDiv);
+        messageDiv.appendChild(textDiv);
+        chatMessages.appendChild(messageDiv);
+        
+        // Scroll to the new message
+        messageDiv.scrollIntoView({ block: 'start', behavior: 'smooth' });
+        
+        // Save to history
+        chatHistory.push({ kind: 'message', type: 'assistant', text: response });
+        saveHistory();
+      }
+
+      // Parse response into ordered segments of text and code blocks
+      function parseResponseSegments(text) {
+        const segments = [];
+        const codeBlockRegex = /(```|~~~)([^\n]*)\n([\s\S]*?)\1/g;
+        let lastIndex = 0;
+        let match;
+        
+        while ((match = codeBlockRegex.exec(text)) !== null) {
+          // Add text before this code block
+          if (match.index > lastIndex) {
+            const textContent = text.substring(lastIndex, match.index).trim();
+            if (textContent) {
+              segments.push({ type: 'text', content: textContent });
+            }
+          }
+          
+          // Add the code block
+          const info = (match[2] || '').trim();
+          const langToken = info.split(/\s+/)[0] || 'text';
+          segments.push({
+            type: 'code',
+            language: langToken,
+            code: match[3]
+          });
+          
+          lastIndex = match.index + match[0].length;
         }
-        // Add each code snippet separately
-        blocks.forEach(b => addCodeSnippet(b.language, b.code));
+        
+        // Add any remaining text after the last code block
+        if (lastIndex < text.length) {
+          const textContent = text.substring(lastIndex).trim();
+          if (textContent) {
+            segments.push({ type: 'text', content: textContent });
+          }
+        }
+        
+        return segments;
+      }
+
+      // Create a code block element
+      function createCodeBlock(language, code) {
+        const lang = (language || 'text').toLowerCase();
+        
+        const codeBlockDiv = document.createElement('div');
+        codeBlockDiv.className = 'code-block';
+        codeBlockDiv.style.marginTop = '10px';
+        codeBlockDiv.style.marginBottom = '10px';
+        
+        // Header with language label + copy button
+        const header = document.createElement('div');
+        header.className = 'code-header';
+        const langLabel = document.createElement('span');
+        langLabel.textContent = lang.toUpperCase();
+        header.appendChild(langLabel);
+
+        const copyBtn = document.createElement('button');
+        copyBtn.className = 'copy-btn';
+        copyBtn.textContent = 'Copy';
+        attachCopy(copyBtn, code || '');
+        header.appendChild(copyBtn);
+
+        // Code content area
+        const codeContent = document.createElement('div');
+        codeContent.className = 'code-content';
+        const pre = document.createElement('pre');
+        const codeEl = document.createElement('code');
+        codeEl.className = `language-${lang}`;
+        codeEl.innerHTML = escapeHtml(code || '');
+        pre.appendChild(codeEl);
+        codeContent.appendChild(pre);
+
+        codeBlockDiv.appendChild(header);
+        codeBlockDiv.appendChild(codeContent);
+        
+        try { if (window.Prism && Prism.highlightElement) { Prism.highlightElement(codeEl); } } catch (_) {}
+        
+        return codeBlockDiv;
       }
 
       // Basic IPC Event Listeners - simplified
