@@ -46,6 +46,30 @@ class LLMService {
     return sel;
   }
 
+  createCancellationError() {
+    const error = new Error('LLM request aborted');
+    error.code = 'LLM_REQUEST_ABORTED';
+    return error;
+  }
+
+  isCancellationError(error) {
+    return error?.code === 'LLM_REQUEST_ABORTED' || error?.name === 'AbortError';
+  }
+
+  throwIfAborted(signal) {
+    if (signal?.aborted) {
+      throw this.createCancellationError();
+    }
+  }
+
+  attachAbortSignal(request, signal) {
+    if (!signal) return;
+    const onAbort = () => request.destroy(this.createCancellationError());
+    signal.addEventListener('abort', onAbort, { once: true });
+    request.once('close', () => signal.removeEventListener('abort', onAbort));
+    if (signal.aborted) onAbort();
+  }
+
   _initializeGeminiClient() {
     const apiKey = config.getApiKey('GEMINI');
     
@@ -294,7 +318,7 @@ class LLMService {
     }
   }
 
-  async processImageWithSkillStream(imageBuffer, mimeType, activeSkill, sessionMemory = [], programmingLanguage = null, onDelta = null) {
+  async processImageWithSkillStream(imageBuffer, mimeType, activeSkill, sessionMemory = [], programmingLanguage = null, onDelta = null, signal = null) {
     if (!this.isInitialized) {
       throw new Error('LLM service not initialized. Check API key configuration.');
     }
@@ -319,11 +343,12 @@ class LLMService {
 
     try {
       let fullText;
+      this.throwIfAborted(signal);
       
       if (provider === 'groq') {
-        fullText = await this._executeGroqImageStream(imageBuffer, mimeType, activeSkill, programmingLanguage, sessionMemory, onDelta);
+        fullText = await this._executeGroqImageStream(imageBuffer, mimeType, activeSkill, programmingLanguage, sessionMemory, onDelta, signal);
       } else if (provider === 'cerebras') {
-        fullText = await this._executeCerebrasImageStream(imageBuffer, mimeType, activeSkill, programmingLanguage, sessionMemory, onDelta);
+        fullText = await this._executeCerebrasImageStream(imageBuffer, mimeType, activeSkill, programmingLanguage, sessionMemory, onDelta, signal);
       } else {
         const skillPrompt = promptLoader.getSkillPrompt(activeSkill, programmingLanguage) || '';
         const base64 = imageBuffer.toString('base64');
@@ -348,7 +373,7 @@ class LLMService {
           if (typeof onDelta === 'function' && delta) {
             onDelta(delta);
           }
-        });
+        }, signal);
       }
 
       fullText = this._stripThinkingTags(fullText);
@@ -379,11 +404,14 @@ class LLMService {
         }
       };
     } catch (error) {
+      if (this.isCancellationError(error)) throw error;
       logger.warn('Streaming image analysis failed, falling back to non-streaming', {
         error: error.message,
         requestId: this.requestCount
       });
-      return this.processImageWithSkill(imageBuffer, mimeType, activeSkill, sessionMemory, programmingLanguage);
+      const fallbackResponse = await this.processImageWithSkill(imageBuffer, mimeType, activeSkill, sessionMemory, programmingLanguage);
+      this.throwIfAborted(signal);
+      return fallbackResponse;
     }
   }
 
@@ -480,7 +508,7 @@ class LLMService {
     }
   }
 
-  async processTextWithSkillStream(text, activeSkill, sessionMemory = [], programmingLanguage = null, onDelta = null) {
+  async processTextWithSkillStream(text, activeSkill, sessionMemory = [], programmingLanguage = null, onDelta = null, signal = null) {
     if (!this.isInitialized) {
       throw new Error('LLM service not initialized. Check API key configuration.');
     }
@@ -502,18 +530,19 @@ class LLMService {
 
     try {
       let fullText;
+      this.throwIfAborted(signal);
       
       if (provider === 'groq') {
-        fullText = await this._executeGroqStream(text, activeSkill, sessionMemory, programmingLanguage, onDelta);
+        fullText = await this._executeGroqStream(text, activeSkill, sessionMemory, programmingLanguage, onDelta, signal);
       } else if (provider === 'cerebras') {
-        fullText = await this._executeCerebrasStream(text, activeSkill, sessionMemory, programmingLanguage, onDelta);
+        fullText = await this._executeCerebrasStream(text, activeSkill, sessionMemory, programmingLanguage, onDelta, signal);
       } else {
         const geminiRequest = this.buildGeminiRequest(text, activeSkill, sessionMemory, programmingLanguage);
         fullText = await this.executeStreamingRequest(geminiRequest, (delta) => {
           if (typeof onDelta === 'function' && delta) {
             onDelta(delta);
           }
-        });
+        }, signal);
       }
 
       fullText = this._stripThinkingTags(fullText);
@@ -543,11 +572,14 @@ class LLMService {
         }
       };
     } catch (error) {
+      if (this.isCancellationError(error)) throw error;
       logger.warn('Streaming text failed, falling back to non-streaming', {
         error: error.message,
         requestId: this.requestCount
       });
-      return this.processTextWithSkill(text, activeSkill, sessionMemory, programmingLanguage);
+      const fallbackResponse = await this.processTextWithSkill(text, activeSkill, sessionMemory, programmingLanguage);
+      this.throwIfAborted(signal);
+      return fallbackResponse;
     }
   }
 
@@ -1056,7 +1088,7 @@ The user is speaking in ${activeSkill.toUpperCase()} mode. Treat each transcript
    * {response, metadata} shape. Falls back to the non-streaming path on any
    * streaming failure so reliability is never worse than before.
    */
-  async processTranscriptionWithIntelligentResponseStream(text, activeSkill, sessionMemory = [], programmingLanguage = null, onDelta = null) {
+  async processTranscriptionWithIntelligentResponseStream(text, activeSkill, sessionMemory = [], programmingLanguage = null, onDelta = null, signal = null) {
     if (!this.isInitialized) {
       throw new Error('LLM service not initialized. Check Gemini API key configuration.');
     }
@@ -1077,19 +1109,20 @@ The user is speaking in ${activeSkill.toUpperCase()} mode. Treat each transcript
     });
 
     try {
+      this.throwIfAborted(signal);
       const geminiRequest = this.buildIntelligentTranscriptionRequest(text, activeSkill, sessionMemory, programmingLanguage);
 
       let fullText;
       if (provider === 'cerebras') {
-        fullText = await this._executeCerebrasStream(text, activeSkill, sessionMemory, programmingLanguage, onDelta);
+        fullText = await this._executeCerebrasStream(text, activeSkill, sessionMemory, programmingLanguage, onDelta, signal);
       } else if (provider === 'groq') {
-        fullText = await this._executeGroqStream(text, activeSkill, sessionMemory, programmingLanguage, onDelta);
+        fullText = await this._executeGroqStream(text, activeSkill, sessionMemory, programmingLanguage, onDelta, signal);
       } else {
         fullText = await this.executeStreamingRequest(geminiRequest, (delta) => {
           if (typeof onDelta === 'function' && delta) {
             onDelta(delta);
           }
-        });
+        }, signal);
       }
 
       fullText = this._stripThinkingTags(fullText);
@@ -1120,13 +1153,16 @@ The user is speaking in ${activeSkill.toUpperCase()} mode. Treat each transcript
         }
       };
     } catch (error) {
+      if (this.isCancellationError(error)) throw error;
       logger.warn('Streaming transcription failed, falling back to non-streaming', {
         error: error.message,
         requestId: this.requestCount
       });
       // Non-streaming path returns the same shape; the caller renders it as a
       // single final response.
-      return this.processTranscriptionWithIntelligentResponse(text, activeSkill, sessionMemory, programmingLanguage);
+      const fallbackResponse = await this.processTranscriptionWithIntelligentResponse(text, activeSkill, sessionMemory, programmingLanguage);
+      this.throwIfAborted(signal);
+      return fallbackResponse;
     }
   }
 
@@ -1165,7 +1201,7 @@ The user is speaking in ${activeSkill.toUpperCase()} mode. Treat each transcript
    * as executeRequest. Accumulates and returns the full text; invokes onDelta
    * for each chunk.
    */
-  async executeStreamingRequest(geminiRequest, onDelta) {
+  async executeStreamingRequest(geminiRequest, onDelta, signal = null) {
     const maxRetries = config.get('llm.gemini.maxRetries');
     const apiKey = config.getApiKey('GEMINI');
     const primaryModel = this.model;
@@ -1177,7 +1213,8 @@ The user is speaking in ${activeSkill.toUpperCase()} mode. Treat each transcript
     for (const modelName of modelsToTry) {
       for (let attempt = 1; attempt <= maxRetries; attempt++) {
         try {
-          const fullText = await this._streamRequestForModel(geminiRequest, modelName, apiKey, onDelta);
+          this.throwIfAborted(signal);
+          const fullText = await this._streamRequestForModel(geminiRequest, modelName, apiKey, onDelta, signal);
 
           if (!fullText) {
             throw new Error('Empty streamed response from Gemini API');
@@ -1191,6 +1228,9 @@ The user is speaking in ${activeSkill.toUpperCase()} mode. Treat each transcript
 
           return fullText;
         } catch (error) {
+          if (this.isCancellationError(error)) {
+            throw this.createCancellationError();
+          }
           const errorInfo = this.analyzeError(error);
           lastError = error;
 
@@ -1216,7 +1256,7 @@ The user is speaking in ${activeSkill.toUpperCase()} mode. Treat each transcript
 
           const baseDelay = errorInfo.isNetworkError ? 2500 : 1500;
           const delay = baseDelay * attempt + Math.random() * 1000;
-          await this.delay(delay);
+          await this.delay(delay, signal);
         }
       }
     }
@@ -1224,8 +1264,9 @@ The user is speaking in ${activeSkill.toUpperCase()} mode. Treat each transcript
     throw lastError || new Error('Gemini streaming request failed');
   }
 
-  _streamRequestForModel(geminiRequest, modelName, apiKey, onDelta) {
+  _streamRequestForModel(geminiRequest, modelName, apiKey, onDelta, signal = null) {
     const https = require('https');
+    this.throwIfAborted(signal);
     const timeout = config.get('llm.gemini.timeout');
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:streamGenerateContent?alt=sse`;
     const postData = JSON.stringify(geminiRequest);
@@ -1244,11 +1285,18 @@ The user is speaking in ${activeSkill.toUpperCase()} mode. Treat each transcript
     };
 
     return new Promise((resolve, reject) => {
+      let settled = false;
+      const finish = (callback, value) => {
+        if (settled) return;
+        settled = true;
+        if (signal) signal.removeEventListener('abort', onAbort);
+        callback(value);
+      };
       const req = https.request(url, options, (res) => {
         if (res.statusCode !== 200) {
           let errBody = '';
           res.on('data', (c) => { errBody += c; });
-          res.on('end', () => reject(new Error(`HTTP ${res.statusCode}: ${errBody}`)));
+          res.on('end', () => finish(reject, new Error(`HTTP ${res.statusCode}: ${errBody}`)));
           return;
         }
 
@@ -1285,14 +1333,26 @@ The user is speaking in ${activeSkill.toUpperCase()} mode. Treat each transcript
           }
         });
 
-        res.on('end', () => resolve(fullText.trim()));
-        res.on('error', (error) => reject(new Error(`Streaming response error: ${error.message}`)));
+        res.on('end', () => finish(resolve, fullText.trim()));
+        res.on('error', (error) => finish(reject, new Error(`Streaming response error: ${error.message}`)));
       });
 
-      req.on('error', (error) => reject(new Error(`Streaming request failed: ${error.message}`)));
+      const onAbort = () => {
+        const error = this.createCancellationError();
+        req.destroy(error);
+        finish(reject, error);
+      };
+      if (signal) signal.addEventListener('abort', onAbort, { once: true });
+
+      req.on('error', (error) => {
+        const normalized = this.isCancellationError(error)
+          ? this.createCancellationError()
+          : new Error(`Streaming request failed: ${error.message}`);
+        finish(reject, normalized);
+      });
       req.on('timeout', () => {
         req.destroy();
-        reject(new Error('Streaming request timeout'));
+        finish(reject, new Error('Streaming request timeout'));
       });
 
       req.write(postData);
@@ -1328,7 +1388,7 @@ The user is speaking in ${activeSkill.toUpperCase()} mode. Treat each transcript
     return messages;
   }
 
-  async _executeGroqStream(text, activeSkill, sessionMemory, programmingLanguage, onDelta) {
+  async _executeGroqStream(text, activeSkill, sessionMemory, programmingLanguage, onDelta, signal = null) {
     const messages = this._buildGroqMessages(text, activeSkill, sessionMemory, programmingLanguage);
     const genConfig = config.get('llm.groq.generation') || {};
     
@@ -1344,7 +1404,8 @@ The user is speaking in ${activeSkill.toUpperCase()} mode. Treat each transcript
     let fullText = '';
     
     try {
-      const stream = await this.groqClient.chat.completions.create(groqRequest);
+      this.throwIfAborted(signal);
+      const stream = await this.groqClient.chat.completions.create(groqRequest, { signal });
       
       for await (const chunk of stream) {
         const content = chunk.choices?.[0]?.delta?.content || '';
@@ -1356,6 +1417,7 @@ The user is speaking in ${activeSkill.toUpperCase()} mode. Treat each transcript
         }
       }
     } catch (error) {
+      if (this.isCancellationError(error) || signal?.aborted) throw this.createCancellationError();
       logger.error('Groq streaming error', { error: error.message });
       throw error;
     }
@@ -1397,7 +1459,7 @@ The user is speaking in ${activeSkill.toUpperCase()} mode. Treat each transcript
     return messages;
   }
 
-  async _executeGroqImageStream(imageBuffer, mimeType, activeSkill, programmingLanguage, sessionMemory = [], onDelta) {
+  async _executeGroqImageStream(imageBuffer, mimeType, activeSkill, programmingLanguage, sessionMemory = [], onDelta, signal = null) {
     const messages = this._buildGroqImageMessages(imageBuffer, mimeType, activeSkill, programmingLanguage, sessionMemory);
     const genConfig = config.get('llm.groq.generation') || {};
     
@@ -1413,7 +1475,8 @@ The user is speaking in ${activeSkill.toUpperCase()} mode. Treat each transcript
     let fullText = '';
     
     try {
-      const stream = await this.groqClient.chat.completions.create(groqRequest);
+      this.throwIfAborted(signal);
+      const stream = await this.groqClient.chat.completions.create(groqRequest, { signal });
       
       for await (const chunk of stream) {
         const content = chunk.choices?.[0]?.delta?.content || '';
@@ -1425,6 +1488,7 @@ The user is speaking in ${activeSkill.toUpperCase()} mode. Treat each transcript
         }
       }
     } catch (error) {
+      if (this.isCancellationError(error) || signal?.aborted) throw this.createCancellationError();
       logger.error('Groq image streaming error', { error: error.message });
       throw error;
     }
@@ -1438,8 +1502,9 @@ The user is speaking in ${activeSkill.toUpperCase()} mode. Treat each transcript
     return this._buildGroqMessages(text, activeSkill, sessionMemory, programmingLanguage);
   }
 
-  _executeCerebrasStream(text, activeSkill, sessionMemory, programmingLanguage, onDelta) {
+  _executeCerebrasStream(text, activeSkill, sessionMemory, programmingLanguage, onDelta, signal = null) {
     const https = require('https');
+    this.throwIfAborted(signal);
     const messages = this._buildCerebrasMessages(text, activeSkill, sessionMemory, programmingLanguage);
     const genConfig = config.get('llm.cerebras.generation') || {};
     const timeout = config.get('llm.cerebras.timeout') || 120000;
@@ -1504,7 +1569,13 @@ The user is speaking in ${activeSkill.toUpperCase()} mode. Treat each transcript
         res.on('error', (error) => reject(new Error(`Cerebras streaming error: ${error.message}`)));
       });
 
-      req.on('error', (error) => reject(new Error(`Cerebras request failed: ${error.message}`)));
+      this.attachAbortSignal(req, signal);
+
+      req.on('error', (error) => reject(
+        this.isCancellationError(error) || signal?.aborted
+          ? this.createCancellationError()
+          : new Error(`Cerebras request failed: ${error.message}`)
+      ));
       req.on('timeout', () => {
         req.destroy();
         reject(new Error('Cerebras request timeout'));
@@ -1545,8 +1616,9 @@ The user is speaking in ${activeSkill.toUpperCase()} mode. Treat each transcript
     return messages;
   }
 
-  async _executeCerebrasImageStream(imageBuffer, mimeType, activeSkill, programmingLanguage, sessionMemory = [], onDelta) {
+  async _executeCerebrasImageStream(imageBuffer, mimeType, activeSkill, programmingLanguage, sessionMemory = [], onDelta, signal = null) {
     const https = require('https');
+    this.throwIfAborted(signal);
     const messages = this._buildCerebrasImageMessages(imageBuffer, mimeType, activeSkill, programmingLanguage, sessionMemory);
     const genConfig = config.get('llm.cerebras.generation') || {};
     const timeout = config.get('llm.cerebras.timeout') || 120000;
@@ -1611,7 +1683,13 @@ The user is speaking in ${activeSkill.toUpperCase()} mode. Treat each transcript
         res.on('error', (error) => reject(new Error(`Cerebras streaming error: ${error.message}`)));
       });
 
-      req.on('error', (error) => reject(new Error(`Cerebras request failed: ${error.message}`)));
+      this.attachAbortSignal(req, signal);
+
+      req.on('error', (error) => reject(
+        this.isCancellationError(error) || signal?.aborted
+          ? this.createCancellationError()
+          : new Error(`Cerebras request failed: ${error.message}`)
+      ));
       req.on('timeout', () => {
         req.destroy();
         reject(new Error('Cerebras request timeout'));
@@ -1961,8 +2039,19 @@ The user is speaking in ${activeSkill.toUpperCase()} mode. Treat each transcript
     };
   }
 
-  delay(ms) {
-    return new Promise(resolve => setTimeout(resolve, ms));
+  delay(ms, signal = null) {
+    this.throwIfAborted(signal);
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        if (signal) signal.removeEventListener('abort', onAbort);
+        resolve();
+      }, ms);
+      const onAbort = () => {
+        clearTimeout(timer);
+        reject(this.createCancellationError());
+      };
+      if (signal) signal.addEventListener('abort', onAbort, { once: true });
+    });
   }
 
   async executeAlternativeRequest(geminiRequest) {

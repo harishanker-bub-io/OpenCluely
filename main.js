@@ -134,6 +134,7 @@ class ApplicationController {
     this._utteranceTimer = null;
     this._utteranceDispatchInFlight = false;
     this._utteranceCoalesceMs = 800;
+    this._activeLlmRequests = new Map();
 
     // First-run onboarding: detects missing .env / API key and triggers
     // a settings-window prompt on first launch so users don't have to
@@ -755,6 +756,15 @@ class ApplicationController {
       return { success: true };
     });
 
+    ipcMain.handle("cancel-llm-request", (_event, messageId) => {
+      const request = this._activeLlmRequests.get(messageId);
+      if (!request || request.controller.signal.aborted) {
+        return { aborted: false };
+      }
+      request.controller.abort();
+      return { aborted: true };
+    });
+
     ipcMain.handle("get-skill-prompt", (event, skillName) => {
       try {
         const { promptLoader } = require('./prompt-loader');
@@ -1052,6 +1062,45 @@ class ApplicationController {
     }
   }
 
+  startLlmRequest(messageId, source) {
+    const request = {
+      controller: new AbortController(),
+      partialText: "",
+      source,
+    };
+    this._activeLlmRequests.set(messageId, request);
+    return request;
+  }
+
+  appendLlmDelta(messageId, delta) {
+    const request = this._activeLlmRequests.get(messageId);
+    if (request && delta) {
+      request.partialText += delta;
+    }
+  }
+
+  finishLlmRequest(messageId) {
+    if (messageId) this._activeLlmRequests.delete(messageId);
+  }
+
+  handleCancelledLlmRequest(messageId, metadata = {}) {
+    const request = this._activeLlmRequests.get(messageId);
+    const partialText = request?.partialText?.trim() || "";
+    if (partialText) {
+      sessionManager.addModelResponse(partialText, {
+        ...metadata,
+        messageId,
+        source: request.source,
+        cancelled: true,
+      });
+    }
+    windowManager.broadcastToAllWindows("llm-request-aborted", {
+      messageId,
+      partialText,
+    });
+    this.finishLlmRequest(messageId);
+  }
+
   async handleCompletedRecording(recording, text) {
     const transcription = String(text || '').trim();
     if (!transcription) {
@@ -1177,6 +1226,7 @@ class ApplicationController {
 
     const startTime = Date.now();
 
+    let messageId = null;
     try {
 
   const capture = await captureService.captureAndProcess();
@@ -1230,7 +1280,8 @@ class ApplicationController {
       const skillsRequiringProgrammingLanguage = ['dsa', 'programming'];
       const needsProgrammingLanguage = skillsRequiringProgrammingLanguage.includes(this.activeSkill);
       this._responseSeq = (this._responseSeq || 0) + 1;
-      const messageId = `img-${Date.now()}-${this._responseSeq}`;
+      messageId = `img-${Date.now()}-${this._responseSeq}`;
+      const activeRequest = this.startLlmRequest(messageId, 'image');
       windowManager.broadcastToAllWindows("transcription-llm-response-start", {
         messageId,
         skill: this.activeSkill
@@ -1243,11 +1294,13 @@ class ApplicationController {
         sessionHistory.recent,
         needsProgrammingLanguage ? this.codingLanguage : null,
         (delta) => {
+          this.appendLlmDelta(messageId, delta);
           windowManager.broadcastToAllWindows("transcription-llm-response-chunk", {
             messageId,
             delta
           });
-        }
+        },
+        activeRequest.controller.signal
       );
       llmResult.metadata = { ...llmResult.metadata, messageId };
 
@@ -1259,13 +1312,22 @@ class ApplicationController {
       });
 
       this.broadcastTranscriptionLLMResponse(llmResult);
+      this.finishLlmRequest(messageId);
     } catch (error) {
+      if (llmService.isCancellationError(error)) {
+        this.handleCancelledLlmRequest(messageId, {
+          skill: this.activeSkill,
+          isImageAnalysis: true,
+        });
+        return;
+      }
+      this.finishLlmRequest(messageId);
       logger.error("Screenshot OCR process failed", {
         error: error.message,
         duration: Date.now() - startTime,
       });
 
-      this.broadcastOCRError(error.message);
+      this.broadcastOCRError(error.message, messageId);
       
       sessionManager.addConversationEvent({
         role: 'system',
@@ -1279,6 +1341,7 @@ class ApplicationController {
   }
 
   async processWithLLM(text, sessionHistory) {
+    let messageId = null;
     try {
       // Check if current skill needs programming language context
       const skillsRequiringProgrammingLanguage = ['dsa', 'programming'];
@@ -1293,7 +1356,8 @@ class ApplicationController {
       });
 
       this._responseSeq = (this._responseSeq || 0) + 1;
-      const messageId = `chat-${Date.now()}-${this._responseSeq}`;
+      messageId = `chat-${Date.now()}-${this._responseSeq}`;
+      const activeRequest = this.startLlmRequest(messageId, 'chat');
       windowManager.broadcastToAllWindows("transcription-llm-response-start", {
         messageId,
         skill: this.activeSkill
@@ -1304,11 +1368,13 @@ class ApplicationController {
         sessionHistory.recent,
         needsProgrammingLanguage ? this.codingLanguage : null,
         (delta) => {
+          this.appendLlmDelta(messageId, delta);
           windowManager.broadcastToAllWindows("transcription-llm-response-chunk", {
             messageId,
             delta
           });
-        }
+        },
+        activeRequest.controller.signal
       );
       llmResult.metadata = { ...llmResult.metadata, messageId };
 
@@ -1331,7 +1397,13 @@ class ApplicationController {
       });
 
       this.broadcastTranscriptionLLMResponse(llmResult);
+      this.finishLlmRequest(messageId);
     } catch (error) {
+      if (llmService.isCancellationError(error)) {
+        this.handleCancelledLlmRequest(messageId, { skill: this.activeSkill });
+        return;
+      }
+      this.finishLlmRequest(messageId);
       logger.error("LLM processing failed", {
         error: error.message,
         skill: this.activeSkill,
@@ -1347,7 +1419,7 @@ class ApplicationController {
         }
       });
 
-      this.broadcastLLMError(error.message);
+      this.broadcastLLMError(error.message, messageId);
     }
   }
 
@@ -1453,6 +1525,7 @@ class ApplicationController {
       // the UI never duplicates or interleaves concurrent responses.
       this._responseSeq = (this._responseSeq || 0) + 1;
       messageId = `tr-${Date.now()}-${this._responseSeq}`;
+      const activeRequest = this.startLlmRequest(messageId, 'transcription');
       windowManager.broadcastToAllWindows("transcription-llm-response-start", {
         messageId,
         skill: this.activeSkill
@@ -1463,11 +1536,13 @@ class ApplicationController {
         sessionHistory.recent,
         needsProgrammingLanguage ? this.codingLanguage : null,
         (delta) => {
+          this.appendLlmDelta(messageId, delta);
           windowManager.broadcastToAllWindows("transcription-llm-response-chunk", {
             messageId,
             delta
           });
-        }
+        },
+        activeRequest.controller.signal
       );
       llmResult.metadata = { ...llmResult.metadata, messageId };
 
@@ -1481,6 +1556,7 @@ class ApplicationController {
 
       // Send response to chat windows
       this.broadcastTranscriptionLLMResponse(llmResult);
+      this.finishLlmRequest(messageId);
 
       logger.info("Transcription LLM response completed", {
         provider: llmService.provider,
@@ -1493,6 +1569,14 @@ class ApplicationController {
       });
 
     } catch (error) {
+      if (llmService.isCancellationError(error)) {
+        this.handleCancelledLlmRequest(messageId, {
+          skill: this.activeSkill,
+          isTranscriptionResponse: true,
+        });
+        return;
+      }
+      this.finishLlmRequest(messageId);
       logger.error("Transcription LLM processing failed", {
         error: error.message,
         errorStack: error.stack,
@@ -1537,6 +1621,7 @@ class ApplicationController {
             skill: this.activeSkill
           }
         });
+        this.broadcastLLMError(error.message, messageId);
       }
     }
   }
@@ -1548,9 +1633,10 @@ class ApplicationController {
     });
   }
 
-  broadcastOCRError(errorMessage) {
+  broadcastOCRError(errorMessage, messageId = null) {
     windowManager.broadcastToAllWindows("ocr-error", {
       error: errorMessage,
+      messageId,
       timestamp: new Date().toISOString(),
     });
   }
@@ -1572,9 +1658,10 @@ class ApplicationController {
     windowManager.broadcastToAllWindows("llm-response", broadcastData);
   }
 
-  broadcastLLMError(errorMessage) {
+  broadcastLLMError(errorMessage, messageId = null) {
     windowManager.broadcastToAllWindows("llm-error", {
       error: errorMessage,
+      messageId,
       timestamp: new Date().toISOString(),
     });
   }

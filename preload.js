@@ -46,6 +46,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   clearSessionMemory: () => ipcRenderer.invoke('clear-session-memory'),
   formatSessionHistory: () => ipcRenderer.invoke('format-session-history'),
   sendChatMessage: (text) => ipcRenderer.invoke('send-chat-message', text),
+  cancelLlmRequest: (messageId) => ipcRenderer.invoke('cancel-llm-request', messageId),
   getSkillPrompt: (skillName) => ipcRenderer.invoke('get-skill-prompt', skillName),
   
   // Gemini LLM configuration
@@ -115,6 +116,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   onTranscriptionLlmResponse: (callback) => ipcRenderer.on('transcription-llm-response', callback),
   onTranscriptionLlmResponseStart: (callback) => ipcRenderer.on('transcription-llm-response-start', callback),
   onTranscriptionLlmResponseChunk: (callback) => ipcRenderer.on('transcription-llm-response-chunk', callback),
+  onLlmRequestAborted: (callback) => ipcRenderer.on('llm-request-aborted', callback),
   onOpenGeminiConfig: (callback) => ipcRenderer.on('open-gemini-config', callback),
   onSkillChanged: (callback) => ipcRenderer.on('skill-changed', callback),
   onInteractionModeChanged: (callback) => ipcRenderer.on('interaction-mode-changed', callback),

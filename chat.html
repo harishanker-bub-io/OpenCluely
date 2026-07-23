@@ -192,6 +192,22 @@
         word-break: break-word;
         overflow-wrap: break-word;
       }
+      .message.assistant.streaming .message-text {
+        white-space: pre-wrap;
+      }
+      .send-button.stop-mode {
+        background: rgba(255, 71, 87, 0.28);
+        color: #ff9ca5;
+      }
+      .send-button.stop-mode:hover {
+        background: rgba(255, 71, 87, 0.42);
+        color: #fff;
+      }
+      .response-status {
+        margin-top: 8px;
+        color: rgba(255, 255, 255, 0.55);
+        font-size: 11px;
+      }
       .message.transcription {
         align-self: flex-end;
         margin-left: auto;
@@ -828,6 +844,7 @@
       let chatMediaStream = null;
       let chatRecordingChunks = [];
       let chatRecordingStartedAt = 0;
+      const liveResponses = new Map();
       let chatRecordingTimeout = null;
       let isStartingRecording = false;
 
@@ -1277,6 +1294,7 @@
 
       // Show thinking indicator
       function showThinkingIndicator() {
+        if (liveResponses.size > 0 || document.getElementById('thinking-indicator')) return;
         const thinkingDiv = document.createElement('div');
         thinkingDiv.className = 'message assistant thinking';
         thinkingDiv.id = 'thinking-indicator';
@@ -1608,24 +1626,130 @@
           saveHistory();
         }
       }
-      function renderAssistantResponse(response) {
+      function isChatNearBottom() {
+        if (!chatMessages) return false;
+        return chatMessages.scrollHeight - chatMessages.scrollTop - chatMessages.clientHeight < 80;
+      }
+
+      function getLatestLiveResponseId() {
+        const messageIds = Array.from(liveResponses.keys());
+        return messageIds.length ? messageIds[messageIds.length - 1] : null;
+      }
+
+      function updateSendButtonMode() {
+        if (!sendButton) return;
+        const isStreaming = liveResponses.size > 0;
+        sendButton.classList.toggle('stop-mode', isStreaming);
+        sendButton.title = isStreaming ? 'Stop response' : 'Send message';
+        sendButton.setAttribute('aria-label', sendButton.title);
+        sendButton.innerHTML = isStreaming
+          ? '<i class="fas fa-stop" aria-hidden="true"></i>'
+          : '<i class="fas fa-paper-plane" aria-hidden="true"></i>';
+      }
+
+      async function stopLatestResponse() {
+        const messageId = getLatestLiveResponseId();
+        if (!messageId || !whysperAPI?.cancelLlmRequest) return false;
+        sendButton.disabled = true;
+        try {
+          const result = await whysperAPI.cancelLlmRequest(messageId);
+          return !!result?.aborted;
+        } catch (error) {
+          console.error('Failed to stop LLM response:', error);
+          return false;
+        } finally {
+          sendButton.disabled = false;
+        }
+      }
+
+      function beginStreamingResponse(messageId) {
+        if (!messageId || liveResponses.has(messageId) || !chatMessages) return;
+        hideThinkingIndicator();
+
+        const messageDiv = document.createElement('div');
+        messageDiv.className = 'message assistant streaming';
+        messageDiv.dataset.streamId = messageId;
+
+        const roleDiv = document.createElement('div');
+        roleDiv.className = 'message-role';
+        roleDiv.textContent = 'Assistant';
+
+        const timeDiv = document.createElement('div');
+        timeDiv.className = 'message-time';
+        timeDiv.textContent = new Date().toLocaleTimeString();
+
+        const textDiv = document.createElement('div');
+        textDiv.className = 'message-text';
+
+        messageDiv.append(roleDiv, timeDiv, textDiv);
+        chatMessages.appendChild(messageDiv);
+        liveResponses.set(messageId, { messageDiv, textDiv, buffer: '' });
+        updateSendButtonMode();
+        chatMessages.scrollTop = chatMessages.scrollHeight;
+      }
+
+      function appendStreamingChunk(messageId, delta) {
+        if (!messageId || !delta) return;
+        if (!liveResponses.has(messageId)) beginStreamingResponse(messageId);
+        const response = liveResponses.get(messageId);
+        if (!response) return;
+        const shouldFollow = isChatNearBottom();
+        response.buffer += delta;
+        response.textDiv.textContent = response.buffer;
+        // Keep the top of the streaming bubble visible so the user reads
+        // from the beginning; only auto-scroll when they are at the bottom.
+        if (shouldFollow && response.messageDiv) {
+          response.messageDiv.scrollIntoView({ block: 'start', behavior: 'instant' });
+        }
+      }
+
+      function markResponseStopped(messageDiv) {
+        if (!messageDiv) return;
+        const status = document.createElement('div');
+        status.className = 'response-status';
+        status.textContent = 'Stopped';
+        messageDiv.appendChild(status);
+      }
+
+      function finalizeStreamingResponse(messageId, response, stopped = false) {
+        const liveResponse = messageId ? liveResponses.get(messageId) : null;
+        if (!liveResponse) {
+          if (response) renderAssistantResponse(response);
+          return;
+        }
+        liveResponses.delete(messageId);
+        updateSendButtonMode();
+        if (!response || !response.trim()) {
+          liveResponse.messageDiv.remove();
+          if (stopped) addMessage('Response stopped', 'system', true);
+          return;
+        }
+        renderAssistantResponse(response, liveResponse.messageDiv);
+        if (stopped) markResponseStopped(liveResponse.messageDiv);
+      }
+
+      function renderAssistantResponse(response, existingMessageDiv = null) {
         if (!response || typeof response !== 'string') return;
         // Deduplication: avoid processing the same response twice
         const normalized = response.trim();
         const h = hashString(normalized);
-        if (recentResponseHashes.has(h)) return;
-        recentResponseHashes.add(h);
-        if (recentResponseHashes.size > RECENT_HASH_LIMIT) {
-          const first = recentResponseHashes.values().next().value;
-          recentResponseHashes.delete(first);
+        if (recentResponseHashes.has(h) && !existingMessageDiv) return;
+        if (!recentResponseHashes.has(h)) {
+          recentResponseHashes.add(h);
+          if (recentResponseHashes.size > RECENT_HASH_LIMIT) {
+            const first = recentResponseHashes.values().next().value;
+            recentResponseHashes.delete(first);
+          }
         }
 
         // Parse response to maintain order of text and code blocks
         const segments = parseResponseSegments(response);
         
         // Create a single message container for the entire response
-        const messageDiv = document.createElement('div');
+        const messageDiv = existingMessageDiv || document.createElement('div');
         messageDiv.className = 'message assistant';
+        messageDiv.removeAttribute('data-stream-id');
+        messageDiv.replaceChildren();
         
         const roleDiv = document.createElement('div');
         roleDiv.className = 'message-role';
@@ -1653,10 +1777,12 @@
         messageDiv.appendChild(roleDiv);
         messageDiv.appendChild(timeDiv);
         messageDiv.appendChild(textDiv);
-        chatMessages.appendChild(messageDiv);
+        if (!existingMessageDiv) chatMessages.appendChild(messageDiv);
         
         // Scroll to the new message
-        messageDiv.scrollIntoView({ block: 'start', behavior: 'smooth' });
+        if (isChatNearBottom()) {
+          messageDiv.scrollIntoView({ block: 'end', behavior: 'smooth' });
+        }
         
         // Save to history
         chatHistory.push({ kind: 'message', type: 'assistant', text: response });
@@ -1810,11 +1936,53 @@
           addMessage('Session memory has been cleared', 'system');
         });
 
-        // Replace transcription LLM handler to store text + snippets
+        if (whysperAPI.onTranscriptionLlmResponseStart) {
+          whysperAPI.onTranscriptionLlmResponseStart((event, data) => {
+            if (data && data.messageId) beginStreamingResponse(data.messageId);
+          });
+        }
+
+        if (whysperAPI.onTranscriptionLlmResponseChunk) {
+          whysperAPI.onTranscriptionLlmResponseChunk((event, data) => {
+            if (data && data.messageId) {
+              appendStreamingChunk(data.messageId, data.delta || '');
+            }
+          });
+        }
+
+        if (whysperAPI.onLlmRequestAborted) {
+          whysperAPI.onLlmRequestAborted((event, data) => {
+            if (data && data.messageId) {
+              const liveResponse = liveResponses.get(data.messageId);
+              const partialText = data.partialText || liveResponse?.buffer || '';
+              finalizeStreamingResponse(data.messageId, partialText, true);
+            }
+          });
+        }
+
+        const handleStreamingError = (data, prefix) => {
+          hideThinkingIndicator();
+          const liveResponse = data?.messageId ? liveResponses.get(data.messageId) : null;
+          if (liveResponse) {
+            liveResponse.messageDiv.remove();
+            liveResponses.delete(data.messageId);
+            updateSendButtonMode();
+          }
+          if (data?.error) addMessage(`${prefix}: ${data.error}`, 'error', true);
+        };
+        if (whysperAPI.onLlmError) {
+          whysperAPI.onLlmError((event, data) => handleStreamingError(data, 'LLM Error'));
+        }
+        if (whysperAPI.onOcrError) {
+          whysperAPI.onOcrError((event, data) => handleStreamingError(data, 'Screenshot Error'));
+        }
+
+        // Final response formats the live bubble, or renders a new one when a
+        // provider had to use the existing non-streaming fallback.
         whysperAPI.onTranscriptionLlmResponse((event, data) => {
           if (data && data.response) {
             try { hideThinkingIndicator(); } catch (_) {}
-            renderAssistantResponse(data.response);
+            finalizeStreamingResponse(data.messageId, data.response);
           }
         });
       }
@@ -1859,6 +2027,10 @@
 
       if (sendButton) {
         sendButton.addEventListener('click', async () => {
+          if (liveResponses.size > 0) {
+            await stopLatestResponse();
+            return;
+          }
           const text = messageInput.value.trim();
           if (text) {
             addMessage(text, 'user');
