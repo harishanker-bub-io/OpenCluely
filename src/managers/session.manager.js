@@ -597,6 +597,8 @@ class SessionManager {
     return this.sessionMemory
       .slice(-count)
       .map(event => ({
+        role: event.role,
+        content: event.content,
         timestamp: event.timestamp,
         action: event.action,
         category: event.category,

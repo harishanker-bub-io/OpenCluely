@@ -141,6 +141,7 @@ class SpeechService extends EventEmitter {
     };
 
     addPart('model_id', 'scribe_v2');
+    addPart('language_code', 'eng');
     addPart('file', fileBuffer, 'recording.webm');
     parts.push(Buffer.from(`--${boundary}--\r\n`, 'utf8'));
 

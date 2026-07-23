@@ -1742,10 +1742,12 @@ class ApplicationController {
       groqKey: process.env.GROQ_API_KEY || "",
       cerebrasKey: process.env.CEREBRAS_API_KEY || "",
       assemblyaiKey: process.env.ASSEMBLYAI_API_KEY || "",
+      elevenlabsKey: process.env.ELEVENLABS_API_KEY || "",
       GEMINI_API_KEY: process.env.GEMINI_API_KEY || "",
       GROQ_API_KEY: process.env.GROQ_API_KEY || "",
       CEREBRAS_API_KEY: process.env.CEREBRAS_API_KEY || "",
       ASSEMBLYAI_API_KEY: process.env.ASSEMBLYAI_API_KEY || "",
+      ELEVENLABS_API_KEY: process.env.ELEVENLABS_API_KEY || "",
       modelSelection: config.getAllModelSelections(),
       speechProvider: process.env.SPEECH_PROVIDER || 'groq',
       llmProvider: config.getLLMProvider(),
@@ -1820,7 +1822,7 @@ class ApplicationController {
       }
 
       // API keys — sent as env-var names directly (e.g. GEMINI_API_KEY)
-      ['GEMINI_API_KEY', 'GROQ_API_KEY', 'CEREBRAS_API_KEY', 'ASSEMBLYAI_API_KEY'].forEach(k => {
+      ['GEMINI_API_KEY', 'GROQ_API_KEY', 'CEREBRAS_API_KEY', 'ASSEMBLYAI_API_KEY', 'ELEVENLABS_API_KEY'].forEach(k => {
         if (settings[k] !== undefined) envUpdates[k] = settings[k];
       });
 
@@ -1829,6 +1831,7 @@ class ApplicationController {
       if (settings.groqKey !== undefined) envUpdates.GROQ_API_KEY = settings.groqKey;
       if (settings.cerebrasKey !== undefined) envUpdates.CEREBRAS_API_KEY = settings.cerebrasKey;
       if (settings.assemblyaiKey !== undefined) envUpdates.ASSEMBLYAI_API_KEY = settings.assemblyaiKey;
+      if (settings.elevenlabsKey !== undefined) envUpdates.ELEVENLABS_API_KEY = settings.elevenlabsKey;
       if (settings.speechProvider !== undefined) envUpdates.SPEECH_PROVIDER = settings.speechProvider;
       if (settings.llmProvider !== undefined) envUpdates.LLM_PROVIDER = settings.llmProvider;
 
@@ -1862,7 +1865,9 @@ class ApplicationController {
       // Reinitialize speech service when voice provider/model or key changes
       const voiceChanged = settings.modelSelection && settings.modelSelection.voice;
       const voiceKeyChanged = settings.GROQ_API_KEY !== undefined ||
-        settings.ASSEMBLYAI_API_KEY !== undefined || settings.speechProvider !== undefined;
+        settings.ASSEMBLYAI_API_KEY !== undefined ||
+        settings.ELEVENLABS_API_KEY !== undefined ||
+        settings.speechProvider !== undefined;
 
       if (voiceChanged || voiceKeyChanged) {
         try {
