@@ -62,6 +62,13 @@ class ConfigManager {
         models: { voice: ['universal-3-5-pro'] },
         pollIntervalMs: 1000, timeoutMs: 120000,
       },
+      elevenlabs: {
+        name: 'ElevenLabs',
+        apiKeyEnv: 'ELEVENLABS_API_KEY',
+        capabilities: { text: false, image: false, voice: true },
+        models: { voice: ['scribe_v2'] },
+        timeoutMs: 120000,
+      },
     };
 
     // ── Active model selection defaults ───────────────────────────
