@@ -21,8 +21,8 @@ class ConfigManager {
         apiKeyEnv: 'GEMINI_API_KEY',
         capabilities: { text: true, image: true, voice: false },
         models: {
-          text:  ['gemini-3.1-flash-lite', 'gemma-4-31b-it', 'gemini-2.5-pro'],
-          image: ['gemini-3.1-flash-lite', 'gemma-4-31b-it', 'gemini-2.5-pro'],
+          text:  ['gemini-3.1-flash-lite', 'gemma-4-31b-it', 'gemini-3.5-flash-lite'],
+          image: ['gemini-3.1-flash-lite', 'gemma-4-31b-it', 'gemini-3.5-flash-lite'],
         },
         generation: {
           temperature: 0.7, topK: 32, topP: 0.9,
@@ -66,8 +66,8 @@ class ConfigManager {
 
     // ── Active model selection defaults ───────────────────────────
     this._defaultSelection = {
-      text:  { provider: 'gemini',   model: 'gemini-3.1-flash-lite' },
-      image: { provider: 'gemini',   model: 'gemini-3.1-flash-lite' },
+      text:  { provider: 'gemini',   model: 'gemini-3.5-flash-lite' },
+      image: { provider: 'gemini',   model: 'gemini-3.5-flash-lite' },
       voice: { provider: 'groq',     model: 'whisper-large-v3-turbo' },
     };
 

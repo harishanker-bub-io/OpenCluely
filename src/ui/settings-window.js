@@ -6,7 +6,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // ── Provider registry (mirrors config.js so the UI can build
     //     dropdowns without an IPC round-trip) ────────────────────
     const PROVIDER_REGISTRY = {
-      gemini:   { name:'Google Gemini', apiKeyEnv:'GEMINI_API_KEY',   capabilities:{text:true,image:true,voice:false}, models:{text:['gemini-3.1-flash-lite','gemma-4-31b-it','gemini-2.5-pro'],image:['gemini-3.1-flash-lite','gemma-4-31b-it','gemini-2.5-pro']} },
+      gemini:   { name:'Google Gemini', apiKeyEnv:'GEMINI_API_KEY',   capabilities:{text:true,image:true,voice:false}, models:{text:['gemini-3.1-flash-lite','gemma-4-31b-it','gemini-3.5-flash-lite'],image:['gemini-3.1-flash-lite','gemma-4-31b-it','gemini-3.5-flash-lite']} },
       groq:     { name:'Groq',          apiKeyEnv:'GROQ_API_KEY',     capabilities:{text:true,image:true,voice:true},  models:{text:['qwen/qwen3.6-27b','openai/gpt-oss-120b','meta-llama/llama-4-maverick-17b-128e-instruct'],image:['qwen/qwen3.6-27b'],voice:['whisper-large-v3-turbo']} },
       cerebras: { name:'Cerebras',      apiKeyEnv:'CEREBRAS_API_KEY', capabilities:{text:true,image:true,voice:false}, models:{text:['zai-glm-4.7','gemma-4-31b'],image:['gemma-4-31b']} },
       assemblyai:{ name:'AssemblyAI',   apiKeyEnv:'ASSEMBLYAI_API_KEY',capabilities:{text:false,image:false,voice:true}, models:{voice:['universal-3-5-pro']} },
