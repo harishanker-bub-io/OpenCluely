@@ -1043,6 +1043,13 @@
         });
       }
 
+      // Auto-focus input when chat window becomes visible
+      if (whysperAPI && whysperAPI.onFocusChatInput) {
+        whysperAPI.onFocusChatInput(() => {
+          if (messageInput) messageInput.focus();
+        });
+      }
+
       // Also capture generic LLM responses (from OCR/screenshot flows)
       if (whysperAPI && whysperAPI.onLlmResponse) {
         whysperAPI.onLlmResponse((event, data) => {

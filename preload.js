@@ -117,6 +117,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   onTranscriptionLlmResponseStart: (callback) => ipcRenderer.on('transcription-llm-response-start', callback),
   onTranscriptionLlmResponseChunk: (callback) => ipcRenderer.on('transcription-llm-response-chunk', callback),
   onLlmRequestAborted: (callback) => ipcRenderer.on('llm-request-aborted', callback),
+  onFocusChatInput: (callback) => ipcRenderer.on('focus-chat-input', callback),
   onOpenGeminiConfig: (callback) => ipcRenderer.on('open-gemini-config', callback),
   onSkillChanged: (callback) => ipcRenderer.on('skill-changed', callback),
   onInteractionModeChanged: (callback) => ipcRenderer.on('interaction-mode-changed', callback),

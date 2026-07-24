@@ -45,7 +45,7 @@ class WindowManager {
         title: 'OpenCluely'
       },
       chat: {
-        width: 650,
+        width: 500,
         height: 700,
         file: 'chat.html',
         title: 'Chat'
@@ -1607,6 +1607,7 @@ class WindowManager {
       this.windows.delete('chat'); // clean stale ref
       this.createChatWindow().then((win) => {
         this.showOnCurrentDesktop(win);
+        this._focusChatInput(win);
         logger.debug('Chat window recreated and shown');
       }).catch((err) => {
         logger.error('Failed to recreate chat window', { error: err.message });
@@ -1615,7 +1616,14 @@ class WindowManager {
     }
 
     this.showOnCurrentDesktop(chatWindow);
+    this._focusChatInput(chatWindow);
     logger.debug('Chat window shown');
+  }
+
+  _focusChatInput(win) {
+    if (!win || win.isDestroyed()) return;
+    try { win.focus(); } catch (_) {}
+    win.webContents.send('focus-chat-input');
   }
 
   hideChatWindow() {
