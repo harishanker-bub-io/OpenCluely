@@ -45,7 +45,7 @@ class WindowManager {
         title: 'OpenCluely'
       },
       chat: {
-        width: 500,
+        width: 650,
         height: 700,
         file: 'chat.html',
         title: 'Chat'
