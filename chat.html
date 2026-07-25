@@ -311,7 +311,6 @@
         border-radius: 0 0 6px 6px;
         font-family: 'Monaco', 'Menlo', monospace;
         font-size: 11px;
-        color: #e5e7eb;
         overflow-x: auto;
         white-space: pre;
         word-wrap: normal;
@@ -328,7 +327,7 @@
         padding: 0;
         border-radius: 0;
         display: block;
-        color: #e5e7eb;
+        color: inherit;
       }
 
       /* Code block wrapper (like center panel) */
@@ -848,7 +847,7 @@
     <script src="lib/markdown.js"></script>
     <script src="lib/mathrender.js"></script>
     <!-- PrismJS core and autoloader for language components -->
-    <script src="./node_modules/prismjs/prism.min.js"></script>
+    <script src="./node_modules/prismjs/prism.js"></script>
     <script src="./node_modules/prismjs/plugins/autoloader/prism-autoloader.min.js"></script>
     
     <script>
@@ -900,6 +899,9 @@
       // already sent to main process). There's no in-flight abort for the
       // STT request, so we just ignore whatever draft/error comes back next.
       let transcriptionCancelledForNextDraft = false;
+      // Monotonic counter bumped on each new recording so stale transcription
+      // results from a previous (still-in-flight) recording are discarded.
+      let lastRecordingGeneration = 0;
 
       // Chat persistence and deduplication
       const CHAT_HISTORY_KEY = 'opencluely_chat_history_v1';
@@ -1397,6 +1399,7 @@
       function handleRecordingStarted() {
         isRecording = true;
         cancelRecordingFlag = false;
+        transcriptionCancelledForNextDraft = false;
 
         if (recordingIndicator) {
           recordingIndicator.style.display = 'block';
@@ -1447,12 +1450,34 @@
           throw new Error('The microphone did not become ready.');
         }
 
+        // Tear down any previous recorder / stream before replacing them
+        // (e.g. user starts recording again while a previous transcription
+        // is still in-flight).  Order matters: set cancelRecordingFlag so
+        // the old stop handler won't submit, null out chatMediaStream so the
+        // old stop handler (which fires async) can't touch the new stream,
+        // then stop the old recorder + old stream tracks.
+        cancelRecordingFlag = true;
+        const oldStream = chatMediaStream;
+        chatMediaStream = null;
+        if (chatMediaRecorder && chatMediaRecorder.state !== 'inactive') {
+          try { chatMediaRecorder.stop(); } catch (_) {}
+        }
+        if (oldStream) {
+          oldStream.getTracks().forEach((track) => track.stop());
+        }
+
         const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
           ? 'audio/webm;codecs=opus'
           : 'audio/webm';
         chatMediaStream = stream;
         chatRecordingChunks = [];
         chatRecordingStartedAt = Date.now();
+
+        // Bump the generation counter so any still-in-flight transcription
+        // results from a previous recording are discarded — only the latest
+        // recording's draft should land in the input box.
+        const myGeneration = ++lastRecordingGeneration;
+
         chatMediaRecorder = new MediaRecorder(stream, { mimeType });
         chatMediaRecorder.addEventListener('dataavailable', (event) => {
           if (event.data && event.data.size) {
@@ -1480,6 +1505,7 @@
               bytes: await blob.arrayBuffer(),
               mimeType,
               durationMs,
+              generation: myGeneration,
             });
             if (!result || !result.success) {
               throw new Error(result && result.error || 'Unable to transcribe audio.');
@@ -1679,7 +1705,7 @@
         messageDiv.appendChild(textDiv);
         chatMessages.appendChild(messageDiv);
 
-        try { if (window.Prism && Prism.highlightElement) { Prism.highlightElement(codeEl); } } catch (_) {}
+        try { if (window.Prism && Prism.highlightElement) { Prism.highlightElement(codeEl, true); } } catch (_) {}
 
         if (!skipPersist) {
           chatHistory.push({ kind: 'snippet', language: lang, code: code || '' });
@@ -1839,6 +1865,9 @@
         messageDiv.appendChild(textDiv);
         if (!existingMessageDiv) chatMessages.appendChild(messageDiv);
         
+        // Highlight all code blocks now that the message is in the DOM
+        try { if (window.Prism && Prism.highlightAllUnder) { Prism.highlightAllUnder(messageDiv); } } catch (_) {}
+        
         // Scroll to the new message
         if (isChatNearBottom()) {
           messageDiv.scrollIntoView({ block: 'end', behavior: 'smooth' });
@@ -1923,8 +1952,6 @@
         codeBlockDiv.appendChild(header);
         codeBlockDiv.appendChild(codeContent);
         
-        try { if (window.Prism && Prism.highlightElement) { Prism.highlightElement(codeEl); } } catch (_) {}
-        
         return codeBlockDiv;
       }
 
@@ -1955,6 +1982,12 @@
               transcriptionCancelledForNextDraft = false;
               return;
             }
+            // data.generation is set by main.js. Discard results from a
+            // recording that has since been superseded (user started a new
+            // recording while this one was still transcribing).
+            if (data && data.generation !== undefined && data.generation !== lastRecordingGeneration) {
+              return;
+            }
             if (data && data.text) handleTranscriptionDraft(data.text);
           });
         }
@@ -1963,6 +1996,9 @@
           hideListeningAnimation();
           if (transcriptionCancelledForNextDraft) {
             transcriptionCancelledForNextDraft = false;
+            return;
+          }
+          if (data && data.generation !== undefined && data.generation !== lastRecordingGeneration) {
             return;
           }
           if (data && data.error) addMessage(`Transcription failed: ${data.error}`, 'error');

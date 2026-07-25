@@ -499,6 +499,7 @@ class ApplicationController {
 
     ipcMain.handle("submit-audio-recording", async (_event, payload) => {
       let recording = null;
+      const generation = (payload && typeof payload.generation === 'number') ? payload.generation : undefined;
       try {
         const byteLength = payload && payload.bytes
           ? (payload.bytes.byteLength || payload.bytes.length || 0)
@@ -507,6 +508,7 @@ class ApplicationController {
           byteLength,
           mimeType: payload && payload.mimeType,
           durationMs: payload && payload.durationMs,
+          generation,
         });
         recording = audioRecordingService.save(
           payload && payload.bytes,
@@ -519,7 +521,7 @@ class ApplicationController {
           audioRecordingService.getPath(recording.recordingId),
           recording.fileName
         );
-        await this.handleCompletedRecording(recording, transcription.text);
+        await this.handleCompletedRecording(recording, transcription.text, generation);
         return { success: true, recording, text: transcription.text };
       } catch (error) {
         logger.error("Audio transcription failed", { error: error.message, recordingId: recording && recording.recordingId });
@@ -532,6 +534,7 @@ class ApplicationController {
         windowManager.broadcastToAllWindows("audio-transcription-failed", {
           recordingId: recording && recording.recordingId,
           error: error.message,
+          generation,
         });
         return { success: false, recording, error: error.message };
       }
@@ -1092,7 +1095,7 @@ class ApplicationController {
     this.finishLlmRequest(messageId);
   }
 
-  async handleCompletedRecording(recording, text) {
+  async handleCompletedRecording(recording, text, generation) {
     const transcription = String(text || '').trim();
     if (!transcription) {
       throw new Error('No speech was detected in this recording');
@@ -1109,6 +1112,7 @@ class ApplicationController {
     windowManager.broadcastToAllWindows('transcription-draft-ready', {
       text: transcription,
       audio,
+      generation,
     });
     // Make sure the chat window (where the editable draft lands) is visible
     // and focused, even if it was hidden mid-recording or the recording was
