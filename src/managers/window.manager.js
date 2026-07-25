@@ -35,6 +35,7 @@ class WindowManager {
     this.bindWindows = true; // Enable window binding by default
     this.windowGap = 10; // Small gap between windows
     this.boundWindowsPosition = { x: 0, y: 0 }; // Track position of bound windows
+    this.chatWindowPosition = null; // Track chat window position for persistence
     
     this.windowConfigs = {
       main: {
@@ -86,6 +87,9 @@ class WindowManager {
       }
     };
 
+    // Load saved chat window position before initializing windows
+    this.loadChatWindowPosition();
+    
     this.init();
   }
 
@@ -231,6 +235,16 @@ class WindowManager {
     }
     const window = await this.createWindow('chat');
     this.windows.set('chat', window);
+    
+    // Track position changes for persistence
+    window.on('moved', () => {
+      if (!window.isDestroyed()) {
+        const [x, y] = window.getPosition();
+        this.chatWindowPosition = { x, y };
+        this.saveChatWindowPosition();
+      }
+    });
+    
     window.hide();
     return window;
   }
@@ -662,6 +676,15 @@ class WindowManager {
     // All windows positioned at top of screen with small margin
     const topMargin = 20;
     const [windowWidth] = window.getSize();
+    
+    // For chat window, try to restore saved position first
+    if (type === 'chat' && this.chatWindowPosition) {
+      window.setPosition(this.chatWindowPosition.x, this.chatWindowPosition.y);
+      logger.debug('Restored chat window position from saved state', {
+        position: `${this.chatWindowPosition.x},${this.chatWindowPosition.y}`
+      });
+      return;
+    }
     
     const positions = {
       main: { x: displayX + 50, y: displayY + topMargin },
@@ -1660,7 +1683,57 @@ class WindowManager {
       skill,
       windowCount: this.windows.size 
     });
+  }
+
+  saveChatWindowPosition() {
+    if (!this.chatWindowPosition) return;
+    
+    try {
+      const fs = require('fs');
+      const path = require('path');
+      const { app } = require('electron');
+      
+      const settingsPath = path.join(app.getPath('userData'), 'settings.json');
+      let settings = {};
+      
+      if (fs.existsSync(settingsPath)) {
+        try {
+          settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
+        } catch (e) {
+          logger.warn('Failed to read settings file for chat position save', { error: e.message });
+        }
+      }
+      
+      settings.chatWindowPosition = this.chatWindowPosition;
+      fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2), 'utf8');
+      
+      logger.debug('Chat window position saved', { position: this.chatWindowPosition });
+    } catch (error) {
+      logger.warn('Failed to save chat window position', { error: error.message });
     }
+  }
+
+  loadChatWindowPosition() {
+    try {
+      const fs = require('fs');
+      const path = require('path');
+      const { app } = require('electron');
+      
+      const settingsPath = path.join(app.getPath('userData'), 'settings.json');
+      
+      if (fs.existsSync(settingsPath)) {
+        const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
+        if (settings.chatWindowPosition) {
+          this.chatWindowPosition = settings.chatWindowPosition;
+          logger.debug('Chat window position loaded', { position: this.chatWindowPosition });
+          return true;
+        }
+      }
+    } catch (error) {
+      logger.warn('Failed to load chat window position', { error: error.message });
+    }
+    return false;
+  }
 }
 
 module.exports = new WindowManager();

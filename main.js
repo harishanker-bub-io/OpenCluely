@@ -1885,8 +1885,8 @@ class ApplicationController {
             }
           });
           logger.info('Speech service reinitialized after settings change', {
-            providerChanged,
-            whisperCommandChanged,
+            voiceChanged: !!voiceChanged,
+            voiceKeyChanged,
             speechAvailable: this.speechAvailable,
           });
         } catch (e) {
