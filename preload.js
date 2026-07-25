@@ -100,6 +100,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   
   // Event listeners
   onTranscriptionReceived: (callback) => ipcRenderer.on('transcription-received', callback),
+  onTranscriptionDraftReady: (callback) => ipcRenderer.on('transcription-draft-ready', callback),
   onInterimTranscription: (callback) => ipcRenderer.on('interim-transcription', callback),
   onSpeechStatus: (callback) => ipcRenderer.on('speech-status', callback),
   onSpeechError: (callback) => ipcRenderer.on('speech-error', callback),

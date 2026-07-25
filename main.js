@@ -523,21 +523,12 @@ class ApplicationController {
         return { success: true, recording, text: transcription.text };
       } catch (error) {
         logger.error("Audio transcription failed", { error: error.message, recordingId: recording && recording.recordingId });
-        if (recording) {
-          sessionManager.addConversationEvent({
-            role: 'user',
-            content: `Transcription failed: ${error.message}`,
-            action: 'speech_transcription_error',
-            metadata: {
-              audio: {
-                recordingId: recording.recordingId,
-                mimeType: recording.mimeType,
-                durationMs: recording.durationMs,
-              },
-              audioError: error.message,
-            },
-          });
-        }
+        // Do NOT persist this as a conversation event: a failed/empty
+        // transcription (e.g. "No speech was detected") is not something the
+        // user said, so it must never show up as a fake "user" chat message
+        // or leak into the LLM's session history context on later requests.
+        // The renderer shows a transient, local-only error via the
+        // "audio-transcription-failed" broadcast below instead.
         windowManager.broadcastToAllWindows("audio-transcription-failed", {
           recordingId: recording && recording.recordingId,
           error: error.message,
@@ -1111,13 +1102,18 @@ class ApplicationController {
       mimeType: recording.mimeType,
       durationMs: recording.durationMs,
     };
-    sessionManager.addUserInput(transcription, 'speech', { audio });
-    windowManager.broadcastToAllWindows('transcription-received', {
+    // Do NOT persist to session memory or call the LLM here. The user gets to
+    // review/edit the transcription in the chat input box first; session
+    // memory + LLM processing only happen once they actually submit it via
+    // the normal "send-chat-message" path (see sendMessage() in chat-window.js).
+    windowManager.broadcastToAllWindows('transcription-draft-ready', {
       text: transcription,
       audio,
     });
-    const sessionHistory = sessionManager.getOptimizedHistory();
-    await this.processTranscriptionWithLLM(transcription, sessionHistory);
+    // Make sure the chat window (where the editable draft lands) is visible
+    // and focused, even if it was hidden mid-recording or the recording was
+    // started from the main overlay's mic button.
+    windowManager.showChatWindow();
   }
 
   adjustOpacity(delta) {

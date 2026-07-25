@@ -81,6 +81,27 @@ class ChatWindowUI {
                     console.warn('Transcription event received but no text data:', data);
                 }
             });
+
+            // Focus the message input whenever the main process asks us to
+            // (e.g. when a recording starts, or a transcription draft lands).
+            if (window.electronAPI.onFocusChatInput) {
+                window.electronAPI.onFocusChatInput(() => {
+                    if (this.elements.messageInput) {
+                        this.elements.messageInput.focus();
+                    }
+                });
+            }
+
+            // Speech-to-text draft: land the transcribed text in the editable
+            // message input instead of auto-sending it. The user reviews it,
+            // edits if needed, and submits manually like any typed message.
+            if (window.electronAPI.onTranscriptionDraftReady) {
+                window.electronAPI.onTranscriptionDraftReady((event, data) => {
+                    if (data && data.text) {
+                        this.handleTranscriptionDraft(data.text);
+                    }
+                });
+            }
             
             // Listen for interim transcription (real-time)
             if (window.electronAPI.onInterimTranscription) {
@@ -290,6 +311,33 @@ class ChatWindowUI {
         } else {
             console.warn('❌ Transcription text is empty or invalid:', text);
         }
+    }
+
+    // Called when a batch transcription finishes for a completed recording.
+    // Unlike handleTranscription() above (legacy/test messages only), this does
+    // NOT add a chat bubble or trigger the LLM — it drops the text into the
+    // editable message input so the user can review, edit, and manually submit it.
+    handleTranscriptionDraft(text) {
+        const draft = String(text || '').trim();
+        if (!draft) return;
+
+        this.hideListeningAnimation();
+
+        const input = this.elements.messageInput;
+        if (!input) return;
+
+        const existing = input.value.trim();
+        input.value = existing ? `${existing} ${draft}` : draft;
+
+        input.focus();
+        const caret = input.value.length;
+        try {
+            input.setSelectionRange(caret, caret);
+        } catch (_) {
+            // setSelectionRange can throw for certain input types; safe to ignore.
+        }
+
+        logger.debug('Transcription draft ready for review', { textLength: draft.length });
     }
 
     async handleSkillActivated(skillName) {

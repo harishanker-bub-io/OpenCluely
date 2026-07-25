@@ -228,11 +228,6 @@
       .message.transcription .message-role {
         text-align: right;
       }
-      .voice-message audio {
-        display: block;
-        width: 100%;
-        margin: 6px 0 8px;
-      }
       
       /* Ensure all content in assistant messages is fully visible */
       .message.assistant .bullet-point,
@@ -728,6 +723,39 @@
         margin-left: 4px;
       }
 
+      .listening-cancel {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        width: 18px;
+        height: 18px;
+        margin-left: 4px;
+        padding: 0;
+        border: none;
+        border-radius: 50%;
+        background: transparent;
+        color: rgba(255, 255, 255, 0.6);
+        font-size: 10px;
+        cursor: pointer;
+        pointer-events: auto;
+        transition: background 0.15s ease, color 0.15s ease;
+      }
+
+      .listening-cancel:hover {
+        background: rgba(244, 67, 54, 0.35);
+        color: #fff;
+      }
+
+      /* Transcribing state: same pill, different color + no duration */
+      .listening-indicator.state-transcribing .wave-bar {
+        background: #4a9eff;
+        animation-duration: 0.9s;
+      }
+
+      .listening-indicator.state-transcribing .listening-duration {
+        display: none;
+      }
+
       /* Interim text overlay */
       .interim-overlay {
         position: fixed;
@@ -777,6 +805,22 @@
             <i class="fas fa-trash"></i>
           </button>
         </div>
+      </div>
+
+      <!-- Listening / Transcribing wave indicator -->
+      <div class="listening-indicator" id="listeningIndicator">
+        <div class="listening-wave">
+          <span class="wave-bar"></span>
+          <span class="wave-bar"></span>
+          <span class="wave-bar"></span>
+          <span class="wave-bar"></span>
+          <span class="wave-bar"></span>
+        </div>
+        <span class="listening-text" id="listeningText">Listening…</span>
+        <span class="listening-duration" id="listeningDuration"></span>
+        <button class="listening-cancel" id="listeningCancelBtn" title="Cancel">
+          <i class="fas fa-times"></i>
+        </button>
       </div>
 
       <!-- Interim Text Overlay -->
@@ -832,6 +876,8 @@
       const chatContainer = document.getElementById('chatContainer');
       const listeningIndicator = document.getElementById('listeningIndicator');
       const listeningDuration = document.getElementById('listeningDuration');
+      const listeningText = document.getElementById('listeningText');
+      const listeningCancelBtn = document.getElementById('listeningCancelBtn');
       const interimOverlay = document.getElementById('interimOverlay');
       const clearHistoryBtn = document.getElementById('clearHistoryBtn');
 
@@ -847,6 +893,13 @@
       const liveResponses = new Map();
       let chatRecordingTimeout = null;
       let isStartingRecording = false;
+      // True while the mic is stopped locally but the user hit Cancel before
+      // the recorder's 'stop' event fired — skips submitting the audio.
+      let cancelRecordingFlag = false;
+      // True after Cancel is clicked while already "Transcribing" (audio
+      // already sent to main process). There's no in-flight abort for the
+      // STT request, so we just ignore whatever draft/error comes back next.
+      let transcriptionCancelledForNextDraft = false;
 
       // Chat persistence and deduplication
       const CHAT_HISTORY_KEY = 'opencluely_chat_history_v1';
@@ -880,7 +933,9 @@
         if (item.kind === 'message') {
           addMessage(item.text, item.type, true);
         } else if (item.kind === 'voice') {
-          await addVoiceMessage(item.text, item.audio, true, item.error);
+          // Legacy entries persisted before audio playback was removed from
+          // chat history — render as plain text, no audio player.
+          addMessage(item.error ? `Transcription failed: ${item.error}` : (item.text || ''), 'transcription', true);
         } else if (item.kind === 'snippet') {
           addCodeSnippet(item.language, item.code, true);
         } else if (item.kind === 'image') {
@@ -938,16 +993,9 @@
               let type = 'user';
               if (event.action === 'speech_transcription') type = 'transcription';
               else if (event.action === 'ocr_extraction') type = 'system';
-              if (event.audio) {
-                newChatHistory.push({
-                  kind: 'voice',
-                  text: event.action === 'speech_transcription' ? event.content : '',
-                  audio: event.audio,
-                  error: event.audioError || null,
-                });
-              } else {
-                newChatHistory.push({ kind: 'message', type, text: event.content });
-              }
+              // Audio metadata (if any, from legacy entries) is no longer used
+              // for chat display — no playable audio in chat history.
+              newChatHistory.push({ kind: 'message', type, text: event.content });
             }
           });
 
@@ -1225,59 +1273,6 @@
         }
       }
 
-      async function addVoiceMessage(text, audio, skipPersist = false, error = null) {
-        if (!chatMessages || !audio || !audio.recordingId) return;
-        const existing = chatMessages.querySelector(`[data-recording-id="${audio.recordingId}"]`);
-        if (existing) {
-          updateVoiceMessage(text, audio, error);
-          return;
-        }
-        const messageDiv = document.createElement('div');
-        messageDiv.className = 'message transcription voice-message';
-        messageDiv.dataset.recordingId = audio.recordingId;
-        const roleDiv = document.createElement('div');
-        roleDiv.className = 'message-role';
-        roleDiv.textContent = 'You · Voice';
-        const timeDiv = document.createElement('div');
-        timeDiv.className = 'message-time';
-        timeDiv.textContent = new Date().toLocaleTimeString();
-        const audioElement = document.createElement('audio');
-        audioElement.controls = true;
-        audioElement.preload = 'metadata';
-        const textDiv = document.createElement('div');
-        textDiv.className = 'message-text voice-transcript';
-        textDiv.textContent = error ? `Transcription failed: ${error}` : (text || 'Transcribing audio…');
-        messageDiv.append(roleDiv, timeDiv, audioElement, textDiv);
-        chatMessages.appendChild(messageDiv);
-        chatMessages.scrollTop = chatMessages.scrollHeight;
-        if (!skipPersist) {
-          chatHistory.push({ kind: 'voice', text: text || '', audio, error });
-          saveHistory();
-        }
-        try {
-          const recording = await window.electronAPI.getAudioRecording(audio.recordingId);
-          if (!recording || !recording.success) throw new Error(recording && recording.error || 'Recording unavailable');
-          const bytes = recording.bytes instanceof Uint8Array
-            ? recording.bytes
-            : new Uint8Array(recording.bytes && recording.bytes.data || recording.bytes);
-          audioElement.src = URL.createObjectURL(new Blob([bytes], { type: recording.mimeType || audio.mimeType || 'audio/webm' }));
-        } catch (loadError) {
-          textDiv.textContent = `${text || 'Audio message'} (audio unavailable: ${loadError.message})`;
-        }
-      }
-
-      function updateVoiceMessage(text, audio, error = null) {
-        const messageDiv = chatMessages && chatMessages.querySelector(`[data-recording-id="${audio.recordingId}"]`);
-        const textDiv = messageDiv && messageDiv.querySelector('.voice-transcript');
-        if (textDiv) textDiv.textContent = error ? `Transcription failed: ${error}` : text;
-        const item = chatHistory.find(entry => entry.kind === 'voice' && entry.audio && entry.audio.recordingId === audio.recordingId);
-        if (item) {
-          item.text = text || '';
-          item.error = error || null;
-          saveHistory();
-        }
-      }
-
       // Markdown formatter using markdown.js library (Maruku dialect for table support)
       function formatMarkdown(text) {
         if (!text) return '';
@@ -1337,7 +1332,9 @@
       // Minimalist Listening Animation Functions
       function showListeningAnimation() {
         if (listeningIndicator) {
-          listeningIndicator.classList.add('active');
+          listeningIndicator.classList.remove('state-transcribing');
+          listeningIndicator.classList.add('active', 'state-listening');
+          if (listeningText) listeningText.textContent = 'Listening…';
 
           // Start timer
           listeningStartTime = Date.now();
@@ -1350,9 +1347,25 @@
         }
       }
 
+      // Switches the wave indicator to "Transcribing…" instead of hiding it,
+      // so the user knows their audio is still being processed after they
+      // stop recording. Cancel remains available (soft-cancel; see
+      // transcriptionCancelledForNextDraft).
+      function showTranscribingState() {
+        if (!listeningIndicator) return;
+        listeningIndicator.classList.add('active', 'state-transcribing');
+        listeningIndicator.classList.remove('state-listening');
+        if (listeningText) listeningText.textContent = 'Transcribing…';
+        if (listeningTimer) {
+          clearInterval(listeningTimer);
+          listeningTimer = null;
+        }
+        listeningStartTime = null;
+      }
+
       function hideListeningAnimation() {
         if (listeningIndicator) {
-          listeningIndicator.classList.remove('active');
+          listeningIndicator.classList.remove('active', 'state-listening', 'state-transcribing');
         }
 
         // Hide interim overlay
@@ -1383,6 +1396,7 @@
       // Recording Event Handlers
       function handleRecordingStarted() {
         isRecording = true;
+        cancelRecordingFlag = false;
 
         if (recordingIndicator) {
           recordingIndicator.style.display = 'block';
@@ -1394,6 +1408,9 @@
         showListeningAnimation();
       }
 
+      // Called once the mic has stopped locally. The wave indicator switches
+      // to "Transcribing…" (kept visible) rather than hiding immediately,
+      // since the audio still needs to come back from the STT provider.
       function handleRecordingStopped() {
         isRecording = false;
 
@@ -1404,7 +1421,7 @@
           micButton.classList.remove('recording');
         }
 
-        hideListeningAnimation();
+        showTranscribingState();
       }
 
       async function startChatRecording() {
@@ -1447,6 +1464,15 @@
           const durationMs = Math.max(0, Date.now() - chatRecordingStartedAt);
           chatRecordingChunks = [];
           chatMediaRecorder = null;
+          const wasCancelled = cancelRecordingFlag;
+          cancelRecordingFlag = false;
+          if (chatMediaStream) {
+            chatMediaStream.getTracks().forEach((track) => track.stop());
+            chatMediaStream = null;
+          }
+          if (wasCancelled) {
+            return;
+          }
           try {
             if (!chunks.length) throw new Error('No audio was captured.');
             const blob = new Blob(chunks, { type: mimeType });
@@ -1459,17 +1485,12 @@
               throw new Error(result && result.error || 'Unable to transcribe audio.');
             }
           } catch (error) {
+            hideListeningAnimation();
             addMessage(`Audio recording failed: ${error.message}`, 'error');
-          } finally {
-            if (chatMediaStream) {
-              chatMediaStream.getTracks().forEach((track) => track.stop());
-              chatMediaStream = null;
-            }
           }
         }, { once: true });
         chatMediaRecorder.start(250);
         handleRecordingStarted();
-        addMessage('Recording started. Click the microphone again to stop.', 'system');
         chatRecordingTimeout = setTimeout(() => {
           if (isRecording) {
             whysperAPI.notifyRecordingTimeout();
@@ -1486,7 +1507,6 @@
         handleRecordingStopped();
         const recorder = chatMediaRecorder;
         if (recorder && recorder.state !== 'inactive') {
-          addMessage('Processing audio…', 'system');
           try {
             recorder.requestData();
           } catch (_) {}
@@ -1499,26 +1519,59 @@
         }
       }
 
-      function handleTranscription(text, audio = null) {
-        if (text && typeof text === 'string' && text.trim().length > 0) {
-          // Hide listening animation first
-          hideListeningAnimation();
+      // Cancel while still recording: discard the audio outright, no
+      // transcription request is ever sent for it.
+      function cancelChatRecording() {
+        if (chatRecordingTimeout) {
+          clearTimeout(chatRecordingTimeout);
+          chatRecordingTimeout = null;
+        }
+        cancelRecordingFlag = true;
+        isRecording = false;
+        if (recordingIndicator) recordingIndicator.style.display = 'none';
+        if (micButton) micButton.classList.remove('recording');
+        hideListeningAnimation();
+        const recorder = chatMediaRecorder;
+        if (recorder && recorder.state !== 'inactive') {
+          recorder.stop();
+        } else if (chatMediaStream) {
+          chatMediaStream.getTracks().forEach((track) => track.stop());
+          chatMediaStream = null;
+        }
+      }
 
-          // Show transcribed text with slight delay for smooth transition
+      function handleTranscription(text) {
+        if (text && typeof text === 'string' && text.trim().length > 0) {
+          hideListeningAnimation();
           setTimeout(() => {
-            if (audio) {
-              const existing = chatMessages && chatMessages.querySelector(`[data-recording-id="${audio.recordingId}"]`);
-              if (existing) updateVoiceMessage(text.trim(), audio);
-              else addVoiceMessage(text.trim(), audio);
-            } else addMessage(text.trim(), 'transcription');
-            
-            // Show thinking indicator after transcription
+            addMessage(text.trim(), 'transcription');
             setTimeout(() => {
               showThinkingIndicator();
             }, 300);
           }, 200);
         } else {
           console.warn('Invalid or empty transcription text - ignoring:', text);
+        }
+      }
+
+      // Called when a completed recording finishes transcribing. Unlike
+      // handleTranscription() above (only used for legacy/dev test pings), this
+      // does NOT add a chat bubble or trigger the LLM — it drops the text into
+      // the editable message input so the user can review, edit, and manually
+      // submit it (same as typing).
+      function handleTranscriptionDraft(text) {
+        const draft = String(text || '').trim();
+        if (!draft || !messageInput) return;
+
+        const existing = messageInput.value.trim();
+        messageInput.value = existing ? `${existing} ${draft}` : draft;
+        autoGrow(messageInput);
+        messageInput.focus();
+        const caret = messageInput.value.length;
+        try {
+          messageInput.setSelectionRange(caret, caret);
+        } catch (_) {
+          // setSelectionRange can throw for certain input types; safe to ignore.
         }
       }
 
@@ -1881,7 +1934,7 @@
       if (whysperAPI) {
         whysperAPI.onTranscriptionReceived((event, data) => {
           if (data && data.text) {
-            handleTranscription(data.text, data.audio || null);
+            handleTranscription(data.text);
           } else {
             console.warn('Invalid transcription data received:', data);
           }
@@ -1893,13 +1946,26 @@
           }
         });
 
-        whysperAPI.onAudioRecordingSaved((event, data) => {
-          if (data && data.recording) addVoiceMessage('', data.recording);
-        });
+        // Speech-to-text draft: land the transcribed text in the editable
+        // message input instead of auto-sending it or playing it back.
+        if (whysperAPI.onTranscriptionDraftReady) {
+          whysperAPI.onTranscriptionDraftReady((event, data) => {
+            hideListeningAnimation();
+            if (transcriptionCancelledForNextDraft) {
+              transcriptionCancelledForNextDraft = false;
+              return;
+            }
+            if (data && data.text) handleTranscriptionDraft(data.text);
+          });
+        }
 
         whysperAPI.onAudioTranscriptionFailed((event, data) => {
-          if (!data || !data.recordingId) return;
-          updateVoiceMessage('', { recordingId: data.recordingId }, data.error || 'Unable to transcribe audio');
+          hideListeningAnimation();
+          if (transcriptionCancelledForNextDraft) {
+            transcriptionCancelledForNextDraft = false;
+            return;
+          }
+          if (data && data.error) addMessage(`Transcription failed: ${data.error}`, 'error');
         });
 
         // Listen for speech status
@@ -2026,6 +2092,21 @@
             addMessage(`Unable to start microphone recording: ${error.message}`, 'error');
           } finally {
             isStartingRecording = false;
+          }
+        });
+      }
+
+      if (listeningCancelBtn) {
+        listeningCancelBtn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          if (isRecording) {
+            cancelChatRecording();
+          } else {
+            // Already stopped and transcribing in the background — the STT
+            // request can't be aborted mid-flight, so just make sure its
+            // result is ignored when it comes back.
+            transcriptionCancelledForNextDraft = true;
+            hideListeningAnimation();
           }
         });
       }
