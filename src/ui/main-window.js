@@ -1082,6 +1082,14 @@ class MainWindowUI {
             }
             if (!this.isRecording) {
                 stream.getTracks().forEach((track) => track.stop());
+                // Stop was requested while we were still waiting on
+                // getUserMedia/getSettings — no MediaRecorder was ever
+                // created, so submitAudioRecording() will never fire. Report
+                // this so any window's "Transcribing" wave indicator doesn't
+                // wait forever for a result that will never arrive.
+                if (window.electronAPI && window.electronAPI.reportCaptureError) {
+                    window.electronAPI.reportCaptureError({ message: 'Recording was stopped before the microphone was ready; no audio was captured.' });
+                }
                 return;
             }
             const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
@@ -1098,6 +1106,9 @@ class MainWindowUI {
                 try {
                     if (!chunks.length) {
                         logger.error('Completed recording contains no audio chunks');
+                        if (window.electronAPI && window.electronAPI.reportCaptureError) {
+                            window.electronAPI.reportCaptureError({ message: 'No audio was captured.' });
+                        }
                         return;
                     }
                     const blob = new Blob(chunks, { type: mimeType });
@@ -1118,6 +1129,9 @@ class MainWindowUI {
             }, 60 * 1000);
         } catch (error) {
             logger.error('Failed to access selected microphone', { error: error.message });
+            if (window.electronAPI && window.electronAPI.reportCaptureError) {
+                window.electronAPI.reportCaptureError(error);
+            }
             window.electronAPI.stopSpeechRecognition();
         }
     }

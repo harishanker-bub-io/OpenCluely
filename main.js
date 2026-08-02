@@ -564,6 +564,13 @@ class ApplicationController {
         constraint: (data && data.constraint) || undefined,
         stack: (data && data.stack) || undefined
       });
+      // A capture failure here means no MediaRecorder/audio ever gets
+      // submitted, so any window's "Transcribing" wave indicator would
+      // otherwise wait forever. Broadcast a failure so it can unstick itself.
+      windowManager.broadcastToAllWindows("audio-transcription-failed", {
+        recordingId: null,
+        error: (data && (data.error || data.message)) || 'Microphone capture failed',
+      });
     });
 
     // Lifecycle/status pings from the renderer capture pipeline. Renderer
