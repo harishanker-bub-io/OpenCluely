@@ -2,12 +2,19 @@
   "name": "opencluely",
   "version": "1.0.0",
   "description": "AI Problem Solving Assistant",
-  "main": "main.js",
+  "main": ".build/main/main.js",
   "scripts": {
     "start": "electron .",
+    "prestart": "npm run build:app",
     "dev": "electron . --no-sandbox --disable-gpu",
+    "predev": "npm run build:app",
+    "typecheck": "tsc --noEmit",
+    "build:app": "node scripts/build-app.mjs",
     "build": "electron-builder",
+    "prebuild": "npm run build:app",
+    "generate:win-icon": "node scripts/generate-windows-icon.mjs",
     "build:mac": "electron-builder --mac",
+    "prebuild:win": "npm run build:app && npm run generate:win-icon",
     "build:win": "electron-builder --win",
     "build:linux": "electron-builder --linux",
     "build:all": "electron-builder --mac --win --linux",
@@ -40,9 +47,13 @@
     "winston-daily-rotate-file": "^4.7.1"
   },
   "devDependencies": {
+    "@types/node": "^26.1.2",
     "cross-env": "^7.0.3",
-    "electron": "^29.4.6",
-    "electron-builder": "^24.13.3"
+    "electron": "^43.2.0",
+    "electron-builder": "^26.15.3",
+    "esbuild": "^0.28.1",
+    "png-to-ico": "^3.0.2",
+    "typescript": "^7.0.2"
   },
   "build": {
     "appId": "com.opencluely.app",
@@ -90,6 +101,7 @@
       }
     },
     "win": {
+      "icon": "assests/icons/app-icon.ico",
       "target": [
         {
           "target": "nsis",
@@ -106,7 +118,7 @@
           ]
         }
       ],
-      "sign": null
+      "signExecutable": false
     },
     "linux": {
       "target": [
@@ -152,6 +164,9 @@
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
+      "installerIcon": "assests/icons/app-icon.ico",
+      "uninstallerIcon": "assests/icons/app-icon.ico",
+      "installerHeaderIcon": "assests/icons/app-icon.ico",
       "perMachine": false,
       "include": "scripts/post-install-nsis.nsh",
       "deleteAppDataOnUninstall": false

@@ -63,19 +63,31 @@ class SessionManager {
     if (!this.persistenceEnabled || !this.persistencePath) return;
     clearTimeout(this._saveTimer);
     this._saveTimer = setTimeout(() => {
-      try {
-        const dir = path.dirname(this.persistencePath);
-        if (!fs.existsSync(dir)) {
-          fs.mkdirSync(dir, { recursive: true });
-        }
-        fs.writeFileSync(this.persistencePath, JSON.stringify(this.sessionMemory), 'utf8');
-      } catch (error) {
-        logger.warn('Failed to persist session memory', {
-          error: error.message,
-          path: this.persistencePath
-        });
-      }
+      this._saveTimer = null;
+      this._writePersistedSession();
     }, this._saveDebounceMs);
+  }
+
+  _writePersistedSession() {
+    if (!this.persistenceEnabled || !this.persistencePath) return;
+    try {
+      const dir = path.dirname(this.persistencePath);
+      if (!fs.existsSync(dir)) {
+        fs.mkdirSync(dir, { recursive: true });
+      }
+      fs.writeFileSync(this.persistencePath, JSON.stringify(this.sessionMemory), 'utf8');
+    } catch (error) {
+      logger.warn('Failed to persist session memory', {
+        error: error.message,
+        path: this.persistencePath
+      });
+    }
+  }
+
+  flushPersistence() {
+    clearTimeout(this._saveTimer);
+    this._saveTimer = null;
+    this._writePersistedSession();
   }
 
   /**
@@ -85,11 +97,12 @@ class SessionManager {
     if (this.isInitialized) return;
     
     try {
-      // Load prompts from the prompt loader
-      promptLoader.loadPrompts();
-      
       // Load any previously persisted session memory first
       this._loadPersistedSession();
+
+      // Load prompts after persistence so a missing asset cannot replace an
+      // existing conversation with a fresh empty session.
+      promptLoader.loadPrompts();
       
       const availableSkills = promptLoader.getAvailableSkills();
       

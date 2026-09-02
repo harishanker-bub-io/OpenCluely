@@ -337,7 +337,7 @@ document.addEventListener('DOMContentLoaded', () => {
             });
         }
 
-        if (windowGapInput) settings.windowGap = windowGapInput.value;
+        if (windowGapInput && windowGapInput.value !== '') settings.windowGap = Number(windowGapInput.value);
         if (codingLanguageSelect) settings.codingLanguage = codingLanguageSelect.value;
         if (activeSkillSelect) settings.activeSkill = activeSkillSelect.value;
         if (resumeInput) settings.resume = resumeInput.value;

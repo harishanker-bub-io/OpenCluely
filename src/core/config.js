@@ -1,5 +1,6 @@
 const path = require('path');
 const os = require('os');
+const fs = require('fs');
 
 class ConfigManager {
   constructor() {
@@ -9,6 +10,10 @@ class ConfigManager {
   }
 
   loadConfiguration() {
+    const compiledPreload = path.join(__dirname, '../preload/preload.js');
+    const sourcePreload = path.join(__dirname, '../../preload.js');
+    const preloadPath = fs.existsSync(compiledPreload) ? compiledPreload : sourcePreload;
+
     // ── Provider registry ──────────────────────────────────────────
     // Each provider declares its capabilities (text / image / voice) and
     // the models available per category.  Adding a new provider is just a
@@ -90,7 +95,7 @@ class ConfigManager {
         webPreferences: {
           nodeIntegration: false, contextIsolation: true,
           enableRemoteModule: false,
-          preload: path.join(__dirname, '../../preload.js')
+          preload: preloadPath
         }
       },
       ocr: { language: 'eng', tempDir: os.tmpdir(), cleanupDelay: 5000 },

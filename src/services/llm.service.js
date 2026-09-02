@@ -417,7 +417,11 @@ class LLMService {
 
   formatImageInstruction(activeSkill, programmingLanguage) {
     const langNote = programmingLanguage ? ` Use only ${programmingLanguage.toUpperCase()} for any code.` : '';
-    return `Analyze this image for a ${activeSkill.toUpperCase()} question. Extract the problem concisely and provide the best possible solution with explanation and final code.${langNote}`;
+    return [
+      'This screenshot is from my live interview and shows the interviewer\'s current question or problem.',
+      'Answer it as me, following the system instructions exactly: output ONLY the words I can say verbatim to the interviewer, starting with the first word of the answer.',
+      `Never describe the image, never quote or restate the question, never explain your plan or reasoning — just the answer itself.${langNote}`
+    ].join(' ');
   }
 
   async processTextWithSkill(text, activeSkill, sessionMemory = [], programmingLanguage = null) {

@@ -2160,10 +2160,7 @@
             addMessage(text, 'user');
             messageInput.value = '';
             
-            // Show thinking indicator after user message
-            setTimeout(() => {
-              showThinkingIndicator();
-            }, 300);
+            showThinkingIndicator();
             
             // Send to main process for session memory storage and LLM processing
             try {
@@ -2171,7 +2168,9 @@
                 await whysperAPI.sendChatMessage(text);
               }
             } catch (error) {
+              hideThinkingIndicator();
               console.error('Failed to send chat message to main process:', error);
+              addMessage(`Unable to send message: ${error.message}`, 'error', true);
             }
           }
         });
@@ -2199,13 +2198,15 @@
               addMessage(text, 'user');
               messageInput.value = '';
               autoGrow(messageInput);
-              setTimeout(() => { showThinkingIndicator(); }, 300);
+              showThinkingIndicator();
               try {
                 if (whysperAPI && whysperAPI.sendChatMessage) {
                   await whysperAPI.sendChatMessage(text);
                 }
               } catch (error) {
+                hideThinkingIndicator();
                 console.error('Failed to send chat message to main process:', error);
+                addMessage(`Unable to send message: ${error.message}`, 'error', true);
               }
             }
           }

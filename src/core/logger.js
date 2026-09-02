@@ -24,6 +24,9 @@ class Logger {
     this.logger = winston.createLogger({
       level: process.env.LOG_LEVEL || 'info',
       format: logFormat,
+      // Never let the logger kill the process: our global handlers in main.js
+      // log uncaught exceptions/rejections and keep the app alive.
+      exitOnError: false,
       defaultMeta: { pid: process.pid },
       transports: [
         new winston.transports.Console({

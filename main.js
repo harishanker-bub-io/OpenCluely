@@ -83,6 +83,10 @@ if (process.platform === 'win32') {
 const logger = require("./src/core/logger").createServiceLogger("MAIN");
 const config = require("./src/core/config");
 const FirstRunManager = require("./src/core/first-run");
+const {
+  assertRecordingPayload,
+  assertSettingsPatch,
+} = require("./src/shared/ipc/contracts");
 
 // ── Global crash guard ──
 // The speech path spawns external processes (Whisper CLI, and on macOS/Linux
@@ -108,6 +112,8 @@ process.on("unhandledRejection", (reason) => {
 const captureService = require("./src/services/capture.service");
 const speechService = require("./src/services/speech.service");
 const audioRecordingService = require("./src/services/audio-recording.service");
+const { PowerSaveService } = require("./src/services/power-save.service");
+const { TrayService } = require("./src/services/tray.service");
 const llmService = require("./src/services/llm.service");
 
 // Managers
@@ -125,6 +131,12 @@ class ApplicationController {
     this.speechAvailable = false;
     this.microphoneDeviceId = "default";
     this.windowOpacity = 1.0;
+    this.powerSaveService = new PowerSaveService({ logger });
+    this.trayService = new TrayService({
+      app,
+      windowManager,
+      logger,
+    });
 
     // Utterance coalescing: VAD emits a transcript per natural pause, but a
     // single spoken question can still arrive as a few fragments (mid-thought
@@ -284,6 +296,7 @@ class ApplicationController {
       const isFirstRun = status.needsOnboarding;
 
       await windowManager.initializeWindows({ showMainWindow: !isFirstRun });
+      this.trayService.create();
       windowManager.setAllWindowsOpacity(this.windowOpacity);
       // Defer broadcast so renderer scripts have time to register IPC listeners
       setTimeout(() => {
@@ -439,10 +452,12 @@ class ApplicationController {
     // events — do not also call global.windowManager from speech.service or
     // getUserMedia will race against a second start/stop cycle.
     speechService.on("recording-started", () => {
+      this.powerSaveService.beginRecording();
       windowManager.handleRecordingStarted();
     });
 
     speechService.on("recording-stopped", () => {
+      this.powerSaveService.endRecording();
       windowManager.handleRecordingStopped();
     });
 
@@ -499,8 +514,10 @@ class ApplicationController {
 
     ipcMain.handle("submit-audio-recording", async (_event, payload) => {
       let recording = null;
-      const generation = (payload && typeof payload.generation === 'number') ? payload.generation : undefined;
+      let generation;
       try {
+        assertRecordingPayload(payload);
+        generation = payload.generation;
         const byteLength = payload && payload.bytes
           ? (payload.bytes.byteLength || payload.bytes.length || 0)
           : 0;
@@ -920,6 +937,7 @@ class ApplicationController {
     });
 
     ipcMain.handle("save-settings", (event, settings) => {
+      assertSettingsPatch(settings);
       return this.saveSettings(settings);
     });
 
@@ -986,7 +1004,12 @@ class ApplicationController {
 
     // Handle save settings (synchronous)
     ipcMain.on("save-settings", (event, settings) => {
-      this.saveSettings(settings);
+      try {
+        assertSettingsPatch(settings);
+        this.saveSettings(settings);
+      } catch (error) {
+        logger.warn("Rejected invalid settings patch", { error: error.message });
+      }
     });
 
     // Handle update skill
@@ -1721,6 +1744,9 @@ class ApplicationController {
 
   onWillQuit() {
     globalShortcut.unregisterAll();
+    this.powerSaveService.shutdown();
+    this.trayService.destroy();
+    sessionManager.flushPersistence();
     windowManager.destroyAllWindows();
 
     const sessionStats = sessionManager.getMemoryUsage();
